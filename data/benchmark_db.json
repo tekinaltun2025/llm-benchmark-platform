@@ -1,0 +1,23 @@
+{
+  "models": [
+    {
+      "id": "1792183662726",
+      "name": "qwen3.8-27b-twin-turbo-fable-cold-fusion-709-ultra-heretic-uncensored-nm-dau-neo-mtp",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "apiKey": "lm-sudio",
+      "modelId": "qwen3.8-27b-twin-turbo-fable-cold-fusion-709-ultra-heretic-uncensored-nm-dau-neo-mtp",
+      "isJudge": false
+    },
+    {
+      "id": "1792186166886",
+      "name": "Test Model",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "apiKey": "test-key",
+      "modelId": "test-model",
+      "isJudge": false
+    }
+  ],
+  "runs": []
+}
