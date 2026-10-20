@@ -2,7 +2,7 @@
   "models": [
     {
       "id": "lmstudio-http---localhost-1234-v1-qwen3-5-9b",
-      "name": "qwen3.5-9b",
+      "name": "Qwen3.5-9B-Q4_K_M",
       "provider": "lmstudio",
       "baseUrl": "http://localhost:1234/v1",
       "modelId": "qwen3.5-9b",
@@ -10,7 +10,7 @@
     },
     {
       "id": "lmstudio-http---localhost-1234-v1-qwen3-coder-next",
-      "name": "qwen3-coder-next",
+      "name": "Qwen3-Coder-Next-Q4_K_M",
       "provider": "lmstudio",
       "baseUrl": "http://localhost:1234/v1",
       "modelId": "qwen3-coder-next",
@@ -26,7 +26,7 @@
     },
     {
       "id": "lmstudio-http---localhost-1234-v1-qwen3-8-27b",
-      "name": "qwen3.8-27b",
+      "name": "Qwen3.8-27B-Q4_K_M",
       "provider": "lmstudio",
       "baseUrl": "http://localhost:1234/v1",
       "modelId": "qwen3.8-27b",
@@ -49,22 +49,12 @@
       "isJudge": false
     },
     {
-      "id": "lmstudio-http---localhost-1234-v1-huihui-glm-5-3-flash-abliterated",
-      "name": "huihui-glm-5.3-flash-abliterated",
-      "provider": "lmstudio",
-      "baseUrl": "http://localhost:1234/v1",
-      "modelId": "huihui-glm-5.3-flash-abliterated",
-      "isJudge": false
-    },
-    {
       "id": "lmstudio-http---localhost-1234-v1-orcarouter-glm-5-3-flash-uncensored",
       "name": "orcarouter_glm-5.3-flash-uncensored",
       "provider": "lmstudio",
       "baseUrl": "http://localhost:1234/v1",
       "modelId": "orcarouter_glm-5.3-flash-uncensored",
-      "isJudge": false,
-      "lastLoadError": "Yükleme başarısız (3 deneme): Loading orcarouter_glm-5.3-flash-uncensored 0% ⠹\nLoading orcarouter_glm-5.3-flash-uncensored 2% ⠹\nLoading orcarouter_glm-5.3-flash-uncensored 2% ⠸\nLoading orcarouter_glm-5.3-flash-uncensored 4% ⠸\nLoading orcarouter_glm-5.3-flash-uncensored 4% ⠼\nLoading orcarouter_glm-5.3-flash-uncensored 4% ⠴\nLoadin",
-      "lastLoadErrorAt": 1792453024344
+      "isJudge": false
     },
     {
       "id": "lmstudio-http---localhost-1234-v1-deepseek-v4-flash-0731-rocmfp3",
@@ -72,9 +62,7 @@
       "provider": "lmstudio",
       "baseUrl": "http://localhost:1234/v1",
       "modelId": "deepseek-v4-flash-0731-rocmfp3",
-      "isJudge": false,
-      "lastLoadError": "Test başarısız: Geçersiz istek — model yapılandırması (baseUrl/modelId) hatalı olabilir",
-      "lastLoadErrorAt": 1792418089248
+      "isJudge": false
     },
     {
       "id": "lmstudio-http---localhost-1234-v1-gemma-4-12b-it-qat",
@@ -86,7 +74,7 @@
     },
     {
       "id": "lmstudio-http---localhost-1234-v1-qwen3-vl-32b-instruct-heretic-v2",
-      "name": "qwen3-vl-32b-instruct-heretic-v2",
+      "name": "qwen3-vl-32b-instruct-heretic-v2-q8_0",
       "provider": "lmstudio",
       "baseUrl": "http://localhost:1234/v1",
       "modelId": "qwen3-vl-32b-instruct-heretic-v2",
@@ -146,9 +134,161 @@
       "provider": "lmstudio",
       "baseUrl": "http://localhost:1234/v1",
       "modelId": "ltx-2.5-uncensored-v1.1",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-http---localhost-1234-v1-qwen3-8-27b-turbo-fable-cold-fusion-735-882-heretic-uncensored-neo-coder-max-mtp",
+      "name": "qwen3.8-27b-turbo-fable-cold-fusion-735-882-heretic-uncensored-neo-coder-max-mtp",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "qwen3.8-27b-turbo-fable-cold-fusion-735-882-heretic-uncensored-neo-coder-max-mtp",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-http---localhost-1234-v1-gemma-4-12b-tng-v8",
+      "name": "gemma-4-12b-tng-v8",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "gemma-4-12b-tng-v8",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-http---localhost-1234-v1-kimi-vl-a3b-thinking",
+      "name": "kimi-vl-a3b-thinking",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "kimi-vl-a3b-thinking",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-http---localhost-1234-v1-glm-4-1v-9b-thinking",
+      "name": "glm-4.1v-9b-thinking",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "glm-4.1v-9b-thinking",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-http---localhost-1234-v1-qwen2-5-vl-32b-instruct",
+      "name": "qwen2.5-vl-32b-instruct-q4_k_m",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "qwen2.5-vl-32b-instruct",
       "isJudge": false,
-      "lastLoadError": "Yükleme başarısız (3 deneme): \nLoading ltx-2.5-uncensored-v1.1 0% ⠋\nLoading ltx-2.5-uncensored-v1.1 0% ⠙\nLoading ltx-2.5-uncensored-v1.1 0% ⠹\nLoading ltx-2.5-uncensored-v1.1 2% ⠹\nLoading ltx-2.5-uncensored-v1.1 2% ⠸\nError: Failed to load model. \n\n\n   (X) CAUSE  \n\nerror loading model: llama_model_loader: failed to load model from",
-      "lastLoadErrorAt": 1792450882188
+      "lastLoadError": "Test başarısız: Invalid state: Controller is already closed",
+      "lastLoadErrorAt": 1792527311753
+    },
+    {
+      "id": "lmstudio-http---localhost-1234-v1-minimax-m2-5-apex",
+      "name": "minimax-m2.5-apex",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "minimax-m2.5-apex",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-http---localhost-1234-v1-gemma-4-31b-fable-5-agent-distill",
+      "name": "gemma-4-31b-fable-5-agent-distill",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "gemma-4-31b-fable-5-agent-distill",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-http---localhost-1234-v1-gemma4-vision",
+      "name": "gemma4-vision",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "gemma4-vision",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-lib-qwen3-8-flash-next-gsq-rco-iq1-m",
+      "name": "Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "qwen3.8-flash-next-gsq-rco-iq1_m",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-lib-qwen3-8-27b-turbofcfusion-735-882-here-uncen-neo-coder-max-mtp-q8-0",
+      "name": "Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-MTP-Q8_0",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "qwen3.8-27b-turbofcfusion-735-882-here-uncen-neo-coder-max-mtp-q8_0",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-lib-qwen3-8-27b-tturbo-fable-c-fusion-709-u-httic-uncen-nm-dau-neo-max-mtp-q8-0",
+      "name": "Qwen3.8-27B-TTURBO-Fable-C-Fusion-709-U-Httic-Uncen-NM-DAU-NEO-MAX-MTP-Q8_0",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "qwen3.8-27b-tturbo-fable-c-fusion-709-u-httic-uncen-nm-dau-neo-max-mtp-q8_0",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-lib-qwen3-6-40b-grintell-f-fusion-uncen-htic-neo-max-mtp-q4-k-s",
+      "name": "Qwen3.6-40B-GrIntell-F-Fusion-Uncen-Htic-NEO-MAX-MTP-Q4_K_S",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "qwen3.6-40b-grintell-f-fusion-uncen-htic-neo-max-mtp-q4_k_s",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-lib-nvidia-nemotron-3-5-lightning-30b-a3b-q4-k-m",
+      "name": "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_K_M",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "nvidia-nemotron-3.5-lightning-30b-a3b-q4_k_m",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-lib-muse-glimmer-30b-kquant-17gb-q4-k-m",
+      "name": "Muse-Glimmer-30B-KQuant-17GB-Q4_K_M",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "muse-glimmer-30b-kquant-17gb-q4_k_m",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-lib-mistralai-devstral-small-2-24b-instruct-2512-q4-k-m",
+      "name": "mistralai_Devstral-Small-2-24B-Instruct-2512-Q4_K_M",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "mistralai_devstral-small-2-24b-instruct-2512-q4_k_m",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-lib-minimax-m2-5-apex-i-mini",
+      "name": "MiniMax-M2.5-APEX-I-Mini",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "minimax-m2.5-apex-i-mini",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-lib-gemma-model",
+      "name": "gemma-model",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "gemma-model",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-lib-gemma-4-31b-fable-5-agent-distill-q8-0",
+      "name": "Gemma-4-31B-Fable-5-Agent-Distill.Q8_0",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "gemma-4-31b-fable-5-agent-distill.q8_0",
+      "isJudge": false
+    },
+    {
+      "id": "lmstudio-lib-gemma-4-12b-tng-v8-q4-k-s",
+      "name": "gemma-4-12B-TNG-V8.Q4_K_S",
+      "provider": "lmstudio",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "gemma-4-12b-tng-v8.q4_k_s",
+      "isJudge": false
     }
   ],
   "runs": [
@@ -2740,27 +2880,8 @@
       1,
       2,
       3,
-      4,
-      5,
-      6,
-      7,
-      8,
-      9,
-      10,
-      11,
-      12,
-      13,
-      14,
-      15,
-      16,
       20,
-      21,
-      22,
-      23,
-      24,
-      25,
-      26,
-      27
+      21
     ]
   }
 }

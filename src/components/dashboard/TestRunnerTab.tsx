@@ -14,6 +14,7 @@ import {
   Layers,
   Square,
   RefreshCw,
+  ClipboardList,
 } from 'lucide-react';
 
 /** Kütüphane modeli: yüklü olmayanlar dahil LM Studio indeksindeki tüm modeller. */
@@ -30,6 +31,12 @@ interface LibraryModel extends ModelConfig {
 interface StatusMessage {
   text: string;
   kind: 'info' | 'retry' | 'error';
+}
+
+/** Soru havuzundan seçili standart soru sayısı (Madde 3 göstergesi). */
+interface QuestionSelectionInfo {
+  enabledQuestionIds: number[] | null;
+  totalStandardQuestions: number;
 }
 
 interface TestRunnerTabProps {
@@ -110,11 +117,32 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
     }
   }, []);
 
+  // Madde 3: Soru havuzu seçimini yükle — kullanıcıya hangi
+  // soruların test edileceğini göstermek için.
+  const [questionSelection, setQuestionSelection] =
+    useState<QuestionSelectionInfo>({ enabledQuestionIds: null, totalStandardQuestions: 24 });
+
+  const fetchQuestionSelection = useCallback(async () => {
+    try {
+      const res = await fetch('/api/questions/selection');
+      if (res.ok) {
+        const body: { enabledQuestionIds: number[] | null } = await res.json();
+        setQuestionSelection((prev) => ({
+          ...prev,
+          enabledQuestionIds: body.enabledQuestionIds,
+        }));
+      }
+    } catch (e) {
+      console.error('Soru seçimi yüklenemedi:', e);
+    }
+  }, []);
+
   useEffect(() => {
     fetchModels();
     fetchLibrary();
     fetchLockStatus();
-  }, [fetchModels, fetchLibrary, fetchLockStatus]);
+    fetchQuestionSelection();
+  }, [fetchModels, fetchLibrary, fetchLockStatus, fetchQuestionSelection]);
 
   // Sunucuda başka bir test çalışıyorsa 5 saniyede bir kontrol et;
   // o test bitince uyarı otomatik olarak kalkar.
@@ -398,6 +426,31 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
       <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
         <Zap className="h-5 w-5 text-sky-400" /> Test Koşucusu (Live Benchmark)
       </h2>
+
+      {/* Madde 3: Bu koşuda hangi soruların test edileceği göstergesi */}
+      <div className="mb-4 flex items-center justify-between flex-wrap gap-2 bg-gray-800/60 rounded-lg px-4 py-3 border border-gray-700 max-w-3xl">
+        <div className="text-sm text-gray-300">
+          <ClipboardList className="inline h-4 w-4 mr-1 text-sky-400" />
+          Bu koşuda{' '}
+          <b className={questionSelection.enabledQuestionIds === null || questionSelection.enabledQuestionIds.length === questionSelection.totalStandardQuestions ? 'text-emerald-300' : 'text-amber-300'}>
+            {questionSelection.enabledQuestionIds === null
+              ? `tüm ${questionSelection.totalStandardQuestions} standart soru`
+              : `${questionSelection.enabledQuestionIds.length}/${questionSelection.totalStandardQuestions} standart soru`}
+          </b>{' '}
+          test edilecek
+          {questionSelection.enabledQuestionIds !== null &&
+            questionSelection.enabledQuestionIds.length < questionSelection.totalStandardQuestions && (
+              <span className="text-gray-500"> (Soru Havuzu sekmesinden seçildi)</span>
+            )}
+        </div>
+        <button
+          onClick={fetchQuestionSelection}
+          className="text-xs text-gray-400 hover:text-sky-300 transition-colors"
+          title="Soru havuzu seçimini yeniden yükle"
+        >
+          ↻ Yenile
+        </button>
+      </div>
 
       <div className="bg-gray-800/60 rounded-lg p-6 space-y-5 border border-gray-700 max-w-3xl">
         {/* Model seçimleri */}

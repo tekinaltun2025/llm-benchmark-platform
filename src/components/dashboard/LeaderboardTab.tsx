@@ -398,6 +398,10 @@ export default function LeaderboardTab() {
                   title="Tümünü seç / temizle"
                 />
               </th>
+              {/* Madde 1: radar karşılaştırma sütunu başlığı (hücre hizası için) */}
+              <th className="px-2 py-3" title="Radar grafiğinde karşılaştır">
+                <RadarIcon className="h-3.5 w-3.5 text-gray-500" />
+              </th>
               <SortHeader label="#" sortKeyName="rank" />
               <SortHeader label="Model Adı" sortKeyName="modelName" />
               <SortHeader label="Sağlayıcı" sortKeyName="provider" />
