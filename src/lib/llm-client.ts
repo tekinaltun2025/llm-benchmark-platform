@@ -1,224 +1,315 @@
 import { ModelConfig } from "../types/benchmark";
 
-/**
- * Represents a chunk of data received from the LLM stream.
- */
-interface StreamChunk {
+/** Sohbet mesajı — multi-turn (adversarial baskı turu) için. */
+export interface ChatMessage {
+  role: "user" | "assistant" | "system";
   content: string;
-  thinking?: string; // If the model outputs thinking in a separate field
+}
+
+/** Streaming LLM çağrısının sonucu: cevap, düşünme süreci ve hız metrikleri. */
+export interface LLMStreamResult {
+  answer: string;
+  thinkingProcess?: string;
+  /** İlk anlamlı token gelene kadar geçen süre (ms) */
+  ttft: number;
+  /** Üretim hızı: saniyede token (TPS) */
+  tps: number;
+  /** Üretilen toplam token sayısı (yaklaşık) */
+  tokenCount: number;
+  /** Toplam üretim süresi (ms) — ilk tokendan akış sonuna kadar */
+  generationMs: number;
+}
+
+/** Varsayılan istek zaman aşımı: 10 dakika (LM Studio model yükleme ve
+ * yavaş thinking modellerin uzun üretimleri dahil). */
+const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * Base URL'in sonundaki eğik çizgiyi temizler.
+ */
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, "");
 }
 
 /**
- * Calls the LLM endpoint with streaming and measures TTFT and TPS.
- * @param modelConfig - The model configuration.
- * @param prompt - The prompt to send to the model.
- * @param options - Optional overrides (e.g., maxTokens for warm-up).
- * @returns A promise that resolves to an object containing the full answer, thinking process (if extracted), TTFT, and TPS.
+ * OpenAI uyumlu /chat/completions uç noktasına streaming istek atar.
+ * TTFT ve TPS metriklerini ölçer; <think> etiketlerini ve
+ * reasoning_content alanını ayrıştırır.
+ *
+ * @param modelConfig Model yapılandırması (baseUrl, apiKey, modelId)
+ * @param prompt Kullanıcı istemi
+ * @param options maxTokens ve timeoutMs ayarları
  */
 export async function callLLMWithStreaming(
   modelConfig: ModelConfig,
-  prompt: string,
-  options?: { maxTokens?: number }
-): Promise<{
-  answer: string;
-  thinkingProcess?: string;
-  ttft: number; // milliseconds
-  tps: number; // tokens per second
-}> {
+  prompt: string | ChatMessage[],
+  options?: { maxTokens?: number; timeoutMs?: number; temperature?: number }
+): Promise<LLMStreamResult> {
   const startTime = Date.now();
   let firstTokenTime: number | null = null;
   let tokenCount = 0;
   let fullAnswer = "";
   let thinkingProcess = "";
 
-  // Prepare the request body in OpenAI chat completions format
+  // Multi-turn: prompt bir mesaj dizisiyse doğrudan kullan (sycophancy turu),
+  // tek string ise tek kullanıcılı sohbete sar.
+  const messages: ChatMessage[] =
+    typeof prompt === "string"
+      ? [{ role: "user", content: prompt }]
+      : prompt;
+
   const requestBody = {
     model: modelConfig.modelId,
-    messages: [{ role: "user", content: prompt }],
+    messages,
     stream: true,
-    temperature: 0.1, // As per spec for phase 1
-    max_tokens: options?.maxTokens ?? 2048, // We can set a reasonable max
+    temperature: options?.temperature ?? 0.1,
+    max_tokens: options?.maxTokens ?? 2048,
   };
 
   const controller = new AbortController();
-  const signal = controller.signal;
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(`${modelConfig.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        // For LM Studio, no API key is needed by default, but we can add if provided
-        ...(modelConfig.apiKey && { Authorization: `Bearer ${modelConfig.apiKey}` }),
-      },
-      body: JSON.stringify(requestBody),
-      signal,
-    });
+    const response = await fetch(
+      `${normalizeBaseUrl(modelConfig.baseUrl)}/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(modelConfig.apiKey
+            ? { Authorization: `Bearer ${modelConfig.apiKey}` }
+            : {}),
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      }
+    );
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      const errorText = await response.text().catch(() => "");
+      throw new Error(
+        `LLM isteği başarısız (HTTP ${response.status}): ${errorText.slice(0, 200)}`
+      );
     }
 
-    // Check if the response body is readable
     if (!response.body) {
-      throw new Error("Response body is not readable");
+      throw new Error("Yanıt gövdesi okunamıyor (stream desteklenmiyor olabilir)");
     }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder("utf-8");
     let buffer = "";
 
-    // Read the stream chunk by chunk
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-      let lines = buffer.split("\n");
-      buffer = lines.pop() ?? ""; // Keep the incomplete line in buffer
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? ""; // Tamamlanmamış satırı buffer'da tut
 
       for (const line of lines) {
-        if (!line.trim()) continue;
-        if (line.startsWith("data: ")) {
-          const data = line.slice(6);
-          if (data === "[DONE]") continue;
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("data:")) continue;
 
-          try {
-            const json = JSON.parse(data);
-            // Extract content from the chunk
-            const content = json.choices?.[0]?.delta?.content ?? "";
-            // Some models might put thinking in a different field, e.g., reasoning_content
-            const thinking = json.choices?.[0]?.delta?.reasoning_content ?? "";
+        const data = trimmed.slice(5).trim();
+        if (data === "[DONE]") continue;
 
-            if (content || thinking) {
-              if (firstTokenTime === null) {
-                firstTokenTime = Date.now();
-              }
-              if (content) {
-                fullAnswer += content;
-                // Approximate token count: assuming 1 token ~ 4 characters
-                tokenCount += Math.ceil(content.length / 4);
-              }
-              if (thinking) {
-                thinkingProcess += thinking;
-              }
+        try {
+          const json = JSON.parse(data);
+          const delta = json.choices?.[0]?.delta;
+          const content: string = delta?.content ?? "";
+          // Bazı sağlayıcılar düşünmeyi ayrı alanda gönderir (ör. DeepSeek R1)
+          const reasoning: string = delta?.reasoning_content ?? "";
+
+          if (content || reasoning) {
+            if (firstTokenTime === null) {
+              firstTokenTime = Date.now();
             }
-          } catch (e) {
-            // Ignore parsing errors in individual chunks
-            console.warn("Failed to parse chunk as JSON:", data);
+            if (content) {
+              fullAnswer += content;
+              // Yaklaşık token sayısı: 1 token ≈ 4 karakter
+              tokenCount += Math.max(1, Math.ceil(content.length / 4));
+            }
+            if (reasoning) {
+              thinkingProcess += reasoning;
+            }
           }
+        } catch {
+          // Tekil chunk JSON hatası akışı bozmasın
         }
       }
     }
 
-    // After the stream ends, calculate TTFT and TPS
     const endTime = Date.now();
     const ttft = firstTokenTime !== null ? firstTokenTime - startTime : 0;
-    const totalTime = endTime - startTime; // in milliseconds
-    // TPS: (total tokens) / (total time in seconds)
-    const tps = totalTime > 0 ? (tokenCount / (totalTime / 1000)) : 0;
+
+    // TPS: ilk tokendan sonra geçen üretim süresine göre hesaplanır.
+    // İlk token hiç gelmediyse 0 döner.
+    const generationMs =
+      firstTokenTime !== null ? endTime - firstTokenTime : 0;
+    const tps = generationMs > 0 ? tokenCount / (generationMs / 1000) : 0;
 
     return {
       answer: fullAnswer,
       thinkingProcess: thinkingProcess || undefined,
       ttft,
       tps,
+      tokenCount,
+      generationMs,
     };
-  } catch (error) {
-    console.error("Error calling LLM:", error);
-    throw error;
   } finally {
-    controller.abort();
+    clearTimeout(timeoutHandle);
   }
 }
 
 /**
- * Extracts thinking process from the answer if it's tagged with 
- * <think>...</think> or similar.
- * This function is used if the model outputs thinking in the answer string itself.
- * @param answer - The raw answer string from the model.
- * @returns An object with the answer (thinking removed) and the thinking process.
+ * Cevap metnindeki  bloklarını ayıklar.
+ * Düşünme metnini ayrı, temiz nihai cevabı ayrı döner.
+ * Birden fazla think bloğu varsa hepsi toplanır.
  */
 export function extractThinkingProcess(answer: string): {
   answer: string;
   thinkingProcess?: string;
 } {
-  // Try to find <think> ... </think> tags
-  const thinkRegex = /<think>([\s\S]*?)<\/think>/i;
-  const match = answer.match(thinkRegex);
-  if (match) {
-    const thinking = match[1].trim();
-    // Remove the think tags from the answer
-    const cleanedAnswer = answer.replace(thinkRegex, "").trim();
-    return {
-      answer: cleanedAnswer,
-      thinkingProcess: thinking,
-    };
+  const thinkRegex = /<think>([\s\S]*?)<\/think>/gi;
+  const matches = [...answer.matchAll(thinkRegex)];
+
+  if (matches.length === 0) {
+    return { answer: answer.trim(), thinkingProcess: undefined };
   }
-  // If no think tags, return the answer as is and no thinking process
+
+  const thinkingParts = matches.map((m) => m[1].trim()).filter(Boolean);
+  const cleanedAnswer = answer.replace(thinkRegex, "").trim();
+
   return {
-    answer: answer,
-    thinkingProcess: undefined,
+    answer: cleanedAnswer,
+    thinkingProcess: thinkingParts.length > 0 ? thinkingParts.join("\n\n") : undefined,
   };
 }
 
 /**
- * Evaluates the given answer using the Judge AI model.
- * @param judgeConfig - The judge model configuration.
- * @param question - The original question.
- * @param answer - The answer to evaluate.
- * @returns A promise that resolves to an object with score (0-100) and reasoning.
+ * Hakem AI (LLM-as-a-Judge) değerlendirmesi.
+ * Hakem modele soru + cevabı gönderir ve
+ * {"score": 0-100, "reasoning": "..."} formatında JSON çıktı alır.
  */
 export async function evaluateWithJudge(
   judgeConfig: ModelConfig,
   question: string,
-  answer: string
-): Promise<{ score: number; reasoning: string }> {
-  // Construct the prompt for the judge
-  const judgePrompt = `
-You are an AI judge tasked with evaluating the answer to a given question.
-Please evaluate the answer based on correctness, completeness, and relevance.
-Provide your evaluation in the following JSON format exactly:
-{
-  "score": <number between 0 and 100>,
-  "reasoning": "<a brief explanation of your score>"
-}
+  answer: string,
+  referenceAnswer?: string
+): Promise<{ score: number; reasoning: string } | null> {
+  // Dinamik sorularda doğru cevap her koşuda rastgele üretilir; hakeme
+  // referans olarak iletilir — aksi halde rastgele sayıları bilemez.
+  const referenceSection = referenceAnswer
+    ? `\nBilinen Doğru Cevap (referans — puanlamada kullan):\n${referenceAnswer}\n`
+    : "";
 
-Question: ${question}
+  const judgePrompt = `Sen bir yapay zeka değerlendirme uzmanısın (Hakem AI). Aşağıda verilen soruya bir modelin verdiği cevabı değerlendireceksin.
 
-Answer: ${answer}
+Değerlendirme kriterleri:
+1. Doğruluk: Cevap sorunun doğru çözümünü/nihai cevabını içeriyor mu?
+2. Eksiksizlik: Cevap sorunun istediği tüm bileşenleri içeriyor mu?
+3. Kalite: Kod sorularında algoritma doğru, verimli (istenen karmaşıklıkta) ve çalışıyor mu? Metin sorularında akıcı ve tutarlı mı?
 
-Your evaluation (JSON only):
-`;
+Cevabı 0 ile 100 arasında bir puanla değerlendir. 100 = kusursuz, 50 = kısmen doğru, 0 = tamamen yanlış veya alakasız.
 
-  try {
-    const result = await callLLMWithStreaming(judgeConfig, judgePrompt);
-    // The judge should return a JSON object. We'll try to parse the answer.
-    const { answer: judgeAnswer } = result;
-    // Extract JSON from the judge's answer
-    // We'll look for the first { and last } to parse
-    const jsonMatch = judgeAnswer.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error("Judge did not return a valid JSON object");
+ÖNEMLİ: Düşünme yapma, adım adım akıl yürütme YAPMA, <think> etiketi KULLANMA. Doğrudan ve SADECE aşağıdaki JSON formatında yanıt ver. İlk karakterin { ve son karakterin } olmalı:
+{"score": <0-100 arası tam sayı>, "reasoning": "<kısa değerlendirme gerekçesi, en fazla 2 cümle>"}
+
+Soru:
+${question}
+${referenceSection}
+Değerlendirilecek Cevap:
+${answer}
+
+JSON çıktın:`;
+
+  /**
+   * Hakem yanıtından puanı toleranslı şekilde çıkarır:
+   * 1) Kod bloğu içindeki JSON, 2) düz metindeki JSON objesi,
+   * 3) JSON.parse başarısız olursa regex ile "score"/"reasoning" alanlarını arar.
+   */
+  const parseJudgeAnswer = (
+    judgeAnswer: string
+  ): { score: number; reasoning: string } | null => {
+    const trimmed = judgeAnswer.trim();
+
+    // Aday JSON dizeleri: önce kod blokları, sonra ilk { ... } aralığı
+    const candidates: string[] = [];
+    const codeBlockMatches = [...trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)];
+    for (const m of codeBlockMatches) candidates.push(m[1].trim());
+    const first = trimmed.indexOf("{");
+    const last = trimmed.lastIndexOf("}");
+    if (first !== -1 && last > first) {
+      candidates.push(trimmed.slice(first, last + 1));
     }
-    const jsonStr = jsonMatch[0];
-    const judgeResult = JSON.parse(jsonStr);
-    // Validate the judgeResult
-    if (typeof judgeResult.score !== "number" || typeof judgeResult.reasoning !== "string") {
-      throw new Error("Judge result missing required fields");
+
+    for (const candidate of candidates) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (
+          parsed &&
+          typeof parsed === "object" &&
+          typeof parsed.score === "number" &&
+          typeof parsed.reasoning === "string"
+        ) {
+          return {
+            score: Math.max(0, Math.min(100, Math.round(parsed.score))),
+            reasoning: parsed.reasoning.trim(),
+          };
+        }
+      } catch {
+        // sıradaki adaya geç
+      }
     }
-    // Clamp score between 0 and 100
-    const score = Math.max(0, Math.min(100, Math.round(judgeResult.score)));
-    return {
-      score,
-      reasoning: judgeResult.reasoning.trim(),
-    };
-  } catch (error) {
-    console.error("Error in judge evaluation:", error);
-    // Fallback: return a low score and the error as reasoning
-    return {
-      score: 0,
-      reasoning: `Judge evaluation failed: ${error instanceof Error ? error.message : String(error)}`,
-    };
+
+    // Toleranslı regex çıkarımı: küçük modeller JSON sözdizimini bozabilir
+    const scoreMatch = trimmed.match(/"score"\s*:\s*"?(\d{1,3})"?/i);
+    const reasoningMatch = trimmed.match(
+      /"reasoning"\s*:\s*"([^"]*(?:"[^"]*"[^"]*)*)"/i
+    );
+    if (scoreMatch) {
+      const score = Math.max(0, Math.min(100, parseInt(scoreMatch[1], 10)));
+      const reasoning = reasoningMatch
+        ? reasoningMatch[1].trim()
+        : "Hakem AI gerekçe alanı döndürmedi.";
+      return { score, reasoning };
+    }
+
+    return null;
+  };
+
+  // İlk deneme + iki retry (thinking modeller düşünmeyle token tüketebilir)
+  const maxAttempts = 3;
+  let lastError: string = "";
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const result = await callLLMWithStreaming(judgeConfig, judgePrompt, {
+        maxTokens: 1024,
+        temperature: 0.1,
+      });
+
+      const parsed = parseJudgeAnswer(result.answer);
+      if (parsed) {
+        return parsed;
+      }
+      lastError = "Hakem AI çıktısında geçerli score/reasoning bulunamadı";
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+
+    if (attempt < maxAttempts) {
+      console.warn(
+        `Hakem AI deneme ${attempt} başarısız (${lastError}), tekrar deneniyor...`
+      );
+    }
   }
+
+  console.error("Hakem AI değerlendirmesi başarısız:", lastError);
+  // Null döndür: hakem başarısızsa puanı DÜŞÜRMESİN — deterministik puan
+  // tek başına geçerli olsun (run route null kontrolü yapar).
+  return null;
 }

@@ -1,42 +1,159 @@
-"use client";
+'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { ModelConfig } from '@/types/benchmark';
+import {
+  Bot,
+  Plus,
+  Trash2,
+  RefreshCw,
+  Scale,
+  Wifi,
+  WifiOff,
+  Loader2,
+  CheckCircle2,
+  XCircle,
+  Cloud,
+} from 'lucide-react';
+
+/**
+ * Hazır online API sağlayıcı şablonları — tıklandığında ekleme formunu
+ * doldurur. Hakem modeli olarak da kullanılabilir (isJudge mekanizması
+ * sağlayıcıdan bağımsız çalışır: OpenAI uyumlu /chat/completions).
+ */
+const API_PROVIDER_TEMPLATES: Array<{
+  name: string;
+  baseUrl: string;
+  modelId: string;
+  label: string;
+  hint: string;
+}> = [
+  {
+    name: 'OpenAI GPT-4o',
+    baseUrl: 'https://api.openai.com/v1',
+    modelId: 'gpt-4o',
+    label: 'OpenAI',
+    hint: 'platform.openai.com API anahtarı',
+  },
+  {
+    name: 'Anthropic Claude (OpenAI uyumlu)',
+    baseUrl: 'https://api.anthropic.com/v1',
+    modelId: 'claude-sonnet-4-5',
+    label: 'Anthropic',
+    hint: 'console.anthropic.com API anahtarı',
+  },
+  {
+    name: 'Groq Llama (ücretsiz katman)',
+    baseUrl: 'https://api.groq.com/openai/v1',
+    modelId: 'llama-3.3-70b-versatile',
+    label: 'Groq',
+    hint: 'console.groq.com API anahtarı — çok hızlı',
+  },
+  {
+    name: 'OpenRouter (tüm modeller)',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    modelId: 'openai/gpt-4o',
+    label: 'OpenRouter',
+    hint: 'openrouter.ai — 300+ model tek anahtarla',
+  },
+  {
+    name: 'DeepSeek Chat',
+    baseUrl: 'https://api.deepseek.com/v1',
+    modelId: 'deepseek-chat',
+    label: 'DeepSeek',
+    hint: 'platform.deepseek.com API anahtarı',
+  },
+  {
+    name: 'Google Gemini (OpenAI uyumlu)',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    modelId: 'gemini-2.0-flash',
+    label: 'Gemini',
+    hint: 'aistudio.google.com API anahtarı',
+  },
+];
 
 export default function ModelManagementTab() {
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [newModel, setNewModel] = useState<Partial<ModelConfig>>({
     name: '',
-    provider: 'lmstudio' as const,
+    provider: 'custom',
     baseUrl: '',
     apiKey: '',
     modelId: '',
-    isJudge: false,
   });
   const [status, setStatus] = useState<string>('');
+  const [statusType, setStatusType] = useState<'info' | 'success' | 'error'>('info');
+  const [discovering, setDiscovering] = useState(false);
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [connectionResult, setConnectionResult] = useState<string | null>(null);
 
-  // Fetch models on mount
-  React.useEffect(() => {
-    fetchModels();
-  }, []);
-
-  async function fetchModels() {
+  const fetchModels = useCallback(async () => {
     try {
       const res = await fetch('/api/models');
       if (res.ok) {
-        const data = await res.json();
+        const data: ModelConfig[] = await res.json();
         setModels(data);
       }
     } catch (e) {
-      console.error('Failed to fetch models:', e);
-      setStatus('Failed to load models');
+      console.error('Modeller yüklenemedi:', e);
+      setStatus('Modeller yüklenemedi');
+      setStatusType('error');
     }
-  }
+  }, []);
 
+  useEffect(() => {
+    fetchModels();
+  }, [fetchModels]);
+
+  const showStatus = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
+    setStatus(message);
+    setStatusType(type);
+  };
+
+  // ─── LM Studio bağlantı testi ────────────────────────────────────
+  const handleTestConnection = async () => {
+    setTestingConnection(true);
+    setConnectionResult(null);
+    try {
+      const res = await fetch('/api/models/discover');
+      const data = await res.json();
+      if (res.ok) {
+        setConnectionResult(`✅ Bağlantı başarılı — ${data.models?.length ?? 0} model bulundu.`);
+      } else {
+        setConnectionResult(`❌ ${data.error ?? 'Bağlantı başarısız'}`);
+      }
+    } catch (e) {
+      setConnectionResult(`❌ Bağlantı hatası: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setTestingConnection(false);
+    }
+  };
+
+  // ─── LM Studio model keşfi (tek tıkla ekleme) ────────────────────
+  const handleDiscoverLMStudio = async () => {
+    setDiscovering(true);
+    showStatus('LM Studio modelleri taranıyor...');
+    try {
+      const res = await fetch('/api/models/discover');
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error ?? 'Keşif başarısız');
+      }
+
+      await fetchModels();
+      showStatus(data.message ?? `${data.models?.length ?? 0} model bulundu.`, 'success');
+    } catch (e) {
+      showStatus(e instanceof Error ? e.message : String(e), 'error');
+    } finally {
+      setDiscovering(false);
+    }
+  };
+
+  // ─── Yeni model ekleme ───────────────────────────────────────────
   const handleAddModel = async () => {
-    // Basic validation
     if (!newModel.name || !newModel.provider || !newModel.baseUrl || !newModel.modelId) {
-      setStatus('Please fill all required fields');
+      showStatus('Lütfen tüm zorunlu alanları doldurun (Ad, Sağlayıcı, Base URL, Model ID).', 'error');
       return;
     }
     try {
@@ -46,215 +163,317 @@ export default function ModelManagementTab() {
         body: JSON.stringify(newModel),
       });
       if (!res.ok) {
-        throw new Error(`Failed to add model: ${await res.text()}`);
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error ?? `Model eklenemedi (HTTP ${res.status})`);
       }
-      const data = await res.json();
-      setModels([...models, data]);
-      // Reset form
       setNewModel({
         name: '',
-        provider: 'lmstudio' as const,
+        provider: 'custom',
         baseUrl: '',
         apiKey: '',
         modelId: '',
-        isJudge: false,
       });
-      setStatus('Model added successfully');
-    } catch (e: any) {
-      setStatus(`Error: ${e.message}`);
+      await fetchModels();
+      showStatus('Model başarıyla eklendi.', 'success');
+    } catch (e) {
+      showStatus(e instanceof Error ? e.message : String(e), 'error');
     }
   };
 
-  const handleDiscoverLMStudio = async () => {
-    try {
-      const res = await fetch('/api/models/discover', {
-        method: 'GET',
-      });
-      if (!res.ok) {
-        throw new Error(`Discovery failed: ${await res.text()}`);
-      }
-      const discovered: ModelConfig[] = await res.json();
-      // For each discovered model, we could add it if not exists (by id)
-      // But for simplicity, we'll just replace the list with discovered ones? 
-      // Actually we want to keep existing custom models and add discovered lmstudio ones.
-      // Let's fetch current models again and merge.
-      const currentRes = await fetch('/api/models');
-      if (!currentRes.ok) throw new Error('Failed to fetch current models');
-      const current: ModelConfig[] = await currentRes.json();
-      // Create a map by id
-      const map = new Map<string, ModelConfig>();
-      current.forEach((m) => map.set(m.id, m));
-      discovered.forEach((m) => {
-        if (!map.has(m.id)) {
-          map.set(m.id, m);
-        }
-      });
-      setModels(Array.from(map.values()));
-      setStatus(`Discovered ${discovered.length} models from LM Studio`);
-    } catch (e: any) {
-      setStatus(`Error: ${e.message}`);
-    }
-  };
-
+  // ─── Model silme ──────────────────────────────────────────────────
   const handleDeleteModel = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this model?')) return;
+    if (!window.confirm('Bu modeli silmek istediğinize emin misiniz?')) return;
     try {
-      const res = await fetch(`/api/models?id=${id}`, {
+      const res = await fetch(`/api/models?id=${encodeURIComponent(id)}`, {
         method: 'DELETE',
       });
-      if (!res.ok) {
-        throw new Error(`Failed to delete model: ${await res.text()}`);
-      }
-      setModels(models.filter((m) => m.id !== id));
-      setStatus('Model deleted');
-    } catch (e: any) {
-      setStatus(`Error: ${e.message}`);
+      if (!res.ok) throw new Error('Silme başarısız');
+      await fetchModels();
+      showStatus('Model silindi.', 'success');
+    } catch (e) {
+      showStatus(e instanceof Error ? e.message : String(e), 'error');
     }
   };
+
+  // ─── Aktif Hakem AI atama ────────────────────────────────────────
+  const handleSetJudge = async (id: string) => {
+    try {
+      const res = await fetch('/api/models', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error ?? 'Hakem atanamadı');
+      }
+      await fetchModels();
+      showStatus('Aktif Hakem Model güncellendi.', 'success');
+    } catch (e) {
+      showStatus(e instanceof Error ? e.message : String(e), 'error');
+    }
+  };
+
+  const activeJudge = models.find((m) => m.isJudge);
 
   return (
     <div className="p-6">
-      <h2 className="text-xl font-bold mb-4">Model Management</h2>
-      <div className="bg-gray-800 rounded-lg p-6">
-        {/* Status */}
-        {status && <p className="mb-4 text-sm">{status}</p>}
+      <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+        <Bot className="h-5 w-5 text-sky-400" /> Model & API Yönetimi
+      </h2>
 
-        {/* Add Model Form */}
-        <div className="mb-6">
-          <h3 className="font-semibold mb-2">Add New Model</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Model Name</label>
-              <input
-                value={newModel.name ?? ''}
-                onChange={(e) => setNewModel({ ...newModel, name: e.target.value })}
-                placeholder="Enter model name"
-                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Provider</label>
-              <select
-                value={newModel.provider ?? 'lmstudio'}
-                onChange={(e) => setNewModel({ ...newModel, provider: e.target.value as 'lmstudio' | 'custom' })}
-                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white"
-              >
-                <option value="lmstudio">LM Studio</option>
-                <option value="custom">Custom API</option>
-              </select>
-            </div>
+      <div className="space-y-6 max-w-5xl">
+        {/* Durum mesajı */}
+        {status && (
+          <div
+            className={`p-3 rounded text-sm border ${
+              statusType === 'success'
+                ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'
+                : statusType === 'error'
+                ? 'bg-red-500/10 border-red-500/40 text-red-300'
+                : 'bg-sky-500/10 border-sky-500/40 text-sky-300'
+            }`}
+          >
+            {status}
+          </div>
+        )}
 
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Base URL</label>
-              <input
-                value={newModel.baseUrl ?? ''}
-                onChange={(e) => setNewModel({ ...newModel, baseUrl: e.target.value })}
-                placeholder="http://localhost:1234/v1"
-                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white"
-              />
+        {/* LM Studio bölümü */}
+        <div className="bg-gray-800/60 rounded-lg p-5 border border-gray-700">
+          <h3 className="font-semibold mb-3 text-gray-200">LM Studio Entegrasyonu</h3>
+          <p className="text-sm text-gray-400 mb-4">
+            Yerel sunucu adresi: <code className="text-sky-300">http://localhost:1234/v1</code>.
+            LM Studio'da <b>Developer → Start Server</b> ile sunucuyu başlatın.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <button
+              onClick={handleTestConnection}
+              disabled={testingConnection}
+              className="flex items-center gap-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white font-medium py-2 px-4 rounded transition-colors"
+            >
+              {testingConnection ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Wifi className="h-4 w-4" />
+              )}
+              Bağlantı Testi
+            </button>
+            <button
+              onClick={handleDiscoverLMStudio}
+              disabled={discovering}
+              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-medium py-2 px-4 rounded transition-colors"
+            >
+              {discovering ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              LM Studio Modellerini Tara
+            </button>
+          </div>
+          {connectionResult && (
+            <div
+              className={`mt-3 text-sm ${
+                connectionResult.startsWith('✅') ? 'text-emerald-300' : 'text-red-300'
+              }`}
+            >
+              {connectionResult}
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">API Key (optional)</label>
-              <input
-                value={newModel.apiKey ?? ''}
-                onChange={(e) => setNewModel({ ...newModel, apiKey: e.target.value })}
-                placeholder="Leave empty for LM Studio"
-                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white"
-              />
-            </div>
+          )}
+        </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Model ID</label>
-              <input
-                value={newModel.modelId ?? ''}
-                onChange={(e) => setNewModel({ ...newModel, modelId: e.target.value })}
-                placeholder="e.g., mistral-small-latest"
-                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">
-                Set as Judge Model?
-              </label>
-              <input
-                type="checkbox"
-                checked={newModel.isJudge ?? false}
-                onChange={(e) => setNewModel({ ...newModel, isJudge: e.target.checked })}
-                className="h-4 w-4 text-blue-600 bg-gray-700 border-gray-600 rounded"
-              />
+        {/* Harici / Bulut API ekleme */}
+        <div className="bg-gray-800/60 rounded-lg p-5 border border-gray-700">
+          <h3 className="font-semibold mb-3 text-gray-200 flex items-center gap-2">
+            <Cloud className="h-4 w-4 text-sky-400" />
+            Harici / Bulut API Ekle
+          </h3>
+
+          {/* Hazır sağlayıcı şablonları — tıkla, form dolsun */}
+          <div className="mb-4">
+            <p className="text-xs text-gray-500 mb-2">
+              Hazır sağlayıcı şablonu seçin (Base URL ve Model ID otomatik dolar,
+              yalnızca API anahtarınızı girin):
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {API_PROVIDER_TEMPLATES.map((tpl) => (
+                <button
+                  key={tpl.label}
+                  onClick={() =>
+                    setNewModel((prev) => ({
+                      ...prev,
+                      name: tpl.name,
+                      provider: 'custom',
+                      baseUrl: tpl.baseUrl,
+                      modelId: tpl.modelId,
+                    }))
+                  }
+                  title={tpl.hint}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                    newModel.baseUrl === tpl.baseUrl
+                      ? 'bg-sky-500/20 border-sky-500/50 text-sky-300'
+                      : 'bg-gray-700/40 border-gray-600 text-gray-300 hover:bg-gray-700/70 hover:border-gray-500'
+                  }`}
+                >
+                  {tpl.label}
+                </button>
+              ))}
             </div>
           </div>
 
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Sağlayıcı Adı *</label>
+              <input
+                value={newModel.name ?? ''}
+                onChange={(e) => setNewModel({ ...newModel, name: e.target.value })}
+                placeholder="örn. OpenAI GPT-4o"
+                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Sağlayıcı Türü</label>
+              <select
+                value={newModel.provider ?? 'custom'}
+                onChange={(e) =>
+                  setNewModel({ ...newModel, provider: e.target.value as 'lmstudio' | 'custom' })
+                }
+                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white"
+              >
+                <option value="custom">Bulut / Harici API</option>
+                <option value="lmstudio">LM Studio (yerel)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Base URL *</label>
+              <input
+                value={newModel.baseUrl ?? ''}
+                onChange={(e) => setNewModel({ ...newModel, baseUrl: e.target.value })}
+                placeholder="https://api.openai.com/v1"
+                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">API Key</label>
+              <input
+                type="password"
+                value={newModel.apiKey ?? ''}
+                onChange={(e) => setNewModel({ ...newModel, apiKey: e.target.value })}
+                placeholder="sk-... (LM Studio için boş bırakın)"
+                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Model ID *</label>
+              <input
+                value={newModel.modelId ?? ''}
+                onChange={(e) => setNewModel({ ...newModel, modelId: e.target.value })}
+                placeholder="gpt-4o / anthropic/claude-3.5-sonnet"
+                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-500"
+              />
+            </div>
+          </div>
           <button
             onClick={handleAddModel}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded mt-4"
+            className="mt-4 flex items-center gap-2 bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-4 rounded transition-colors"
           >
-            Add Model
+            <Plus className="h-4 w-4" /> Model Ekle
           </button>
         </div>
 
-        {/* Discover LM Studio Models */}
-        <div className="mb-6">
-          <h3 className="font-semibold mb-2">Discover LM Studio Models</h3>
-          <p className="text-sm text-gray-400 mb-2">
-            Click to fetch available models from your local LM Studio instance (http://localhost:1234/v1)
-          </p>
-          <button
-            onClick={handleDiscoverLMStudio}
-            className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded"
-          >
-            Discover LM Studio Models
-          </button>
-        </div>
+        {/* Kayıtlı modeller listesi */}
+        <div className="bg-gray-800/60 rounded-lg p-5 border border-gray-700">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-gray-200">Kayıtlı Modeller ({models.length})</h3>
+            {activeJudge && (
+              <div className="text-xs text-violet-300 flex items-center gap-1">
+                <Scale className="h-3.5 w-3.5" />
+                Aktif Hakem: <b>{activeJudge.name}</b>
+              </div>
+            )}
+          </div>
 
-        {/* Current Models List */}
-        <div className="mt-6">
-          <h3 className="font-semibold mb-2">Current Models ({models.length})</h3>
           {models.length === 0 ? (
-            <p className="text-gray-400">No models added yet.</p>
+            <p className="text-gray-400 text-sm">
+              Henüz model yok. Yukarıdaki "LM Studio Modellerini Tara" butonunu kullanın
+              veya manuel olarak bir API modeli ekleyin.
+            </p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="min-w-full bg-gray-800 rounded-lg divide-y divide-gray-700">
-                <thead className="bg-gray-900">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                      Name
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                      Provider
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                      Base URL
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                      Model ID
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                      Judge?
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                      Actions
-                    </th>
+              <table className="min-w-full divide-y divide-gray-700">
+                <thead>
+                  <tr className="text-left text-xs text-gray-400 uppercase">
+                    <th className="px-4 py-3">Ad</th>
+                    <th className="px-4 py-3">Sağlayıcı</th>
+                    <th className="px-4 py-3">Base URL</th>
+                    <th className="px-4 py-3">Model ID</th>
+                    <th className="px-4 py-3">Durum</th>
+                    <th className="px-4 py-3">Hakem</th>
+                    <th className="px-4 py-3">İşlemler</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-700">
                   {models.map((model) => (
-                    <tr key={model.id} className="hover:bg-gray-700">
-                      <td className="px-6 py-4 text-sm text-white">{model.name}</td>
-                      <td className="px-6 py-4 text-sm text-gray-300">
-                        {model.provider === 'lmstudio' ? 'LM Studio' : 'Custom'}
+                    <tr
+                      key={model.id}
+                      className={`hover:bg-gray-700/40 ${
+                        model.lastLoadError ? 'bg-red-500/5' : ''
+                      }`}
+                    >
+                      <td className="px-4 py-3 text-sm text-white max-w-[16rem] truncate" title={model.name}>
+                        {model.name}
                       </td>
-                      <td className="px-6 py-4 text-sm text-gray-200 truncate max-w-xs">{model.baseUrl}</td>
-                      <td className="px-6 py-4 text-sm text-gray-200 break-all">{model.modelId}</td>
-                      <td className="px-6 py-4 text-sm text-gray-200">
-                        {model.isJudge ? 'Yes' : 'No'}
+                      <td className="px-4 py-3 text-sm">
+                        <span
+                          className={`px-2 py-0.5 rounded text-xs ${
+                            model.provider === 'lmstudio'
+                              ? 'bg-emerald-500/20 text-emerald-300'
+                              : 'bg-violet-500/20 text-violet-300'
+                          }`}
+                        >
+                          {model.provider === 'lmstudio' ? 'LM Studio' : 'API'}
+                        </span>
                       </td>
-                      <td className="px-6 py-4 text-sm flex space-x-2">
+                      <td className="px-4 py-3 text-sm text-gray-300 max-w-[14rem] truncate" title={model.baseUrl}>
+                        {model.baseUrl}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-300 max-w-[14rem] truncate" title={model.modelId}>
+                        {model.modelId}
+                      </td>
+                      <td className="px-4 py-3 text-sm">
+                        {model.lastLoadError ? (
+                          <span
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red-500/20 text-red-300 text-xs"
+                            title={model.lastLoadError}
+                          >
+                            ⚠️ Çalışmıyor
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-xs">
+                            ✓ Çalışıyor
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-sm">
+                        {model.isJudge ? (
+                          <span className="flex items-center gap-1 text-violet-300">
+                            <CheckCircle2 className="h-4 w-4" /> Aktif
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => handleSetJudge(model.id)}
+                            className="text-xs px-2 py-1 rounded bg-violet-600/30 hover:bg-violet-600/50 text-violet-300 transition-colors"
+                          >
+                            Hakem Yap
+                          </button>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
                         <button
                           onClick={() => handleDeleteModel(model.id)}
-                          className="text-red-500 hover:text-red-700"
+                          className="flex items-center gap-1 text-red-400 hover:text-red-300 text-sm"
                         >
-                          Delete
+                          <Trash2 className="h-4 w-4" /> Sil
                         </button>
                       </td>
                     </tr>

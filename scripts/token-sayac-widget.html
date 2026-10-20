@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin:0; font-family: var(--font, system-ui, sans-serif); color: var(--foreground); }
+  .wrap { display:inline-block; min-width: 340px; }
+  .top { display:flex; gap:18px; align-items:baseline; flex-wrap:wrap; }
+  .big { font-size:30px; font-weight:700; font-variant-numeric: tabular-nums; }
+  .lbl { font-size:11px; opacity:.65; text-transform:uppercase; letter-spacing:.5px; }
+  .sub { font-size:13px; opacity:.85; margin-top:2px; font-variant-numeric: tabular-nums; }
+  .head { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:6px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:#3ad07a; display:inline-block; margin-right:5px; }
+  .dot.off { background:#e05252; }
+  .src { font-size:11px; opacity:.6; }
+  table { border-collapse:collapse; margin-top:10px; width:100%; font-size:12.5px; }
+  td, th { text-align:right; padding:3px 10px 3px 0; font-variant-numeric: tabular-nums; }
+  th { opacity:.55; font-weight:500; font-size:10.5px; text-transform:uppercase; letter-spacing:.4px; }
+  td:first-child, th:first-child { text-align:left; }
+  .bar { height:3px; border-radius:2px; background: var(--accent, #4a7dff); margin-top:3px; }
+  a { color: var(--accent); font-size:11.5px; text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="wrap" id="w">
+  <div class="head">
+    <span class="lbl"><span class="dot off" id="dot"></span>LM Studio Token Sayacı</span>
+    <span class="src" id="src">bağlanıyor…</span>
+  </div>
+  <div class="top">
+    <div><div class="big" id="prod">0</div><div class="lbl">üretilen token</div></div>
+    <div><div class="sub" id="today">bugün: 0</div><div class="sub" id="prompt">prompt: 0</div></div>
+  </div>
+  <div class="sub" id="busy" style="display:none;color:#f5a623">şu an üretimde: ~0 token</div>
+  <table id="tbl"><tr><td style="opacity:.5">veri bekleniyor…</td></tr></table>
+  <div style="margin-top:8px"><a href="http://127.0.0.1:8790/" target="_blank">tam paneyi aç →</a></div>
+</div>
+<script>
+const nf = new Intl.NumberFormat('tr-TR');
+async function load(){
+  try {
+    const s = await (await fetch('http://127.0.0.1:8790/stats')).json();
+    document.getElementById('dot').classList.remove('off');
+    const age = s.last_event_ts ? Math.round(Date.now()/1000 - s.last_event_ts) : null;
+    document.getElementById('src').textContent =
+      (age != null) ? ('son olay ' + age + ' sn önce') : 'olay bekleniyor';
+    const busy = s.in_flight_tokens || 0;
+    const bEl = document.getElementById('busy');
+    if (busy > 0) { bEl.style.display = ''; bEl.textContent = 'şu an üretimde: ~' + nf.format(busy) + ' token'; }
+    else { bEl.style.display = 'none'; }
+    document.getElementById('prod').textContent = nf.format(s.totals.completion_tokens);
+    document.getElementById('today').textContent = 'bugün: ' + nf.format(s.today.completion_tokens);
+    document.getElementById('prompt').textContent = 'prompt: ' + nf.format(s.totals.prompt_tokens);
+    const ms = Object.entries(s.models).map(([id, m]) => ({...m, id}))
+      .sort((a,b) => b.completion_tokens - a.completion_tokens).slice(0, 6);
+    const max = Math.max(1, ...ms.map(m => m.completion_tokens));
+    document.getElementById('tbl').innerHTML = ms.length
+      ? '<tr><th>model</th><th>üretilen</th><th>istek</th></tr>' +
+        ms.map(m => `<tr><td>${m.label}<div class="bar" style="width:${Math.max(3, 100*m.completion_tokens/max)}%"></div></td><td>${nf.format(m.completion_tokens)}</td><td>${nf.format(m.predictions)}</td></tr>`).join('')
+      : '<tr><td style="opacity:.5">henüz veri yok</td></tr>';
+  } catch(e) {
+    document.getElementById('dot').classList.add('off');
+    document.getElementById('src').textContent = 'sayaca erişilemiyor';
+  }
+}
+load(); setInterval(load, 1000);
+</script>
+</body>
+</html>

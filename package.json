@@ -2,7 +2,7 @@
   "name": "ai-benchmark",
   "version": "0.1.0",
   "private": true,
-  "description": "Next.js AI Benchmark & Leaderboard Platform",
+  "description": "Next.js AI Benchmark & Leaderboard Platform (LM Studio + Cloud API + Judge AI)",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -21,9 +21,8 @@
     "@types/node": "^22.10.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
-    "autoprefixer": "^10.6.1",
     "eslint": "^9.39.5",
-    "eslint-config-next": "^16.4.0",
+    "eslint-config-next": "^15.5.6",
     "postcss": "^8.5.30",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.2"

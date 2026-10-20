@@ -1,130 +1,110 @@
 import { NextResponse } from 'next/server';
-import { ModelConfig, BenchmarkRun } from '@/types/benchmark';
+import { LeaderboardEntry, BenchmarkRun } from '@/types/benchmark';
 import { readDB } from '@/lib/db';
-import { benchmarkQuestions } from '@/lib/benchmark-suite';
+import { computeEfficiencyIndex } from '@/lib/efficiency';
 
+/**
+ * GET /api/leaderboard
+ *
+ * Her modelin EN GÜNCEL koşusunu baz alarak leaderboard satırları üretir.
+ * Satırlar Genel Skor'a göre azalan sıralı döner.
+ */
 export async function GET() {
   try {
-    const { models, runs } = await readDB();
+    const { runs } = await readDB();
 
-    // If there are no runs, return empty array
     if (runs.length === 0) {
       return NextResponse.json([]);
     }
 
-    // Aggregate runs by model to compute average scores, etc.
-    const modelStats: Record<
-      string,
-      {
-        modelConfig: ModelConfig;
-        totalScoreSum: number;
-        count: number;
-        categoryScores: Record<string, number[]>;
-        avgTTFT: number[];
-        avgTPS: number[];
+    // Model başına en güncel koşuyu seç.
+    // Kimlik: DB kayıt ID'si DEĞİL, gerçek model kimliği (provider+modelId) —
+    // aynı model farklı kayıt yollarından test edilse bile tek satır olur.
+    const latestRunByModel = new Map<string, BenchmarkRun>();
+    for (const run of runs) {
+      const identity = `${run.modelConfig.provider}:${run.modelConfig.modelId.toLowerCase()}`;
+      const existing = latestRunByModel.get(identity);
+      if (!existing || run.timestamp > existing.timestamp) {
+        latestRunByModel.set(identity, run);
       }
-    > = {};
+    }
 
-    runs.forEach((run) => {
-      const id = run.modelConfig.id;
-      if (!modelStats[id]) {
-        modelStats[id] = {
-          modelConfig: run.modelConfig,
-          totalScoreSum: 0,
-          count: 0,
-          categoryScores: {
-            logic: [],
-            math: [],
-            ifeval: [],
-            json: [],
-            code: [],
-          },
-          avgTTFT: [],
-          avgTPS: [],
-        };
-      }
-      const stat = modelStats[id];
-      stat.totalScoreSum += run.totalScore;
-      stat.count += 1;
-      stat.avgTTFT.push(run.avgTTFT);
-      stat.avgTPS.push(run.avgTPS);
+    const leaderboard: LeaderboardEntry[] = [];
 
-      // Distribute question results to categories
-      run.results.forEach((result) => {
-        const question = benchmarkQuestions.find((q: { id: number }) => q.id === result.questionId);
-        if (question) {
-          stat.categoryScores[question.category].push(result.finalScore);
-        }
-      });
-    });
-
-    // Convert to array and compute averages
-    const leaderboard: Array<{
-      modelName: string;
-      provider: 'lmstudio' | 'custom';
-      totalScore: number;
-      categoryScores: {
-        logic: number;
-        math: number;
-        ifeval: number;
-        json: number;
-        code: number;
+    for (const run of latestRunByModel.values()) {
+      // Kategori bazlı ortalama puanlar (7 kategori: 5 standart + needle + adversarial)
+      const categoryScores: LeaderboardEntry['categoryScores'] = {
+        logic: 0,
+        math: 0,
+        ifeval: 0,
+        json: 0,
+        code: 0,
+        needle: 0,
+        adversarial: 0,
+        turkish: 0,
       };
-      avgTTFT: number;
-      avgTPS: number;
-    }> = [];
-
-    for (const id in modelStats) {
-      const stat = modelStats[id];
-      const avgTotalScore =
-        stat.count > 0 ? Math.round((stat.totalScoreSum / stat.count) * 100) / 100 : 0;
-      const categoryScores: Record<string, number> = {};
-      for (const cat in stat.categoryScores) {
-        const scores = stat.categoryScores[cat as keyof typeof stat.categoryScores];
-        categoryScores[cat] =
-          scores.length > 0
-            ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100
-            : 0;
+      const categoryCounts: Record<string, number[]> = {};
+      for (const result of run.results) {
+        if (!categoryCounts[result.category]) categoryCounts[result.category] = [];
+        categoryCounts[result.category].push(result.finalScore);
       }
-      const avgTTFT =
-        stat.avgTTFT.length > 0
-          ? Math.round(
-              (stat.avgTTFT.reduce((a, b) => a + b, 0) / stat.avgTTFT.length) *
-                100
-            ) / 100
-          : 0;
-      const avgTPS =
-        stat.avgTPS.length > 0
-          ? Math.round(
-              (stat.avgTPS.reduce((a, b) => a + b, 0) / stat.avgTPS.length) *
-                100
-            ) / 100
-          : 0;
+      (Object.keys(categoryScores) as Array<keyof typeof categoryScores>).forEach(
+        (cat) => {
+          const scores = categoryCounts[cat] ?? [];
+          categoryScores[cat] =
+            scores.length > 0
+              ? Math.round(
+                  (scores.reduce((a, b) => a + b, 0) / scores.length) * 100
+                ) / 100
+              : 0;
+        }
+      );
+
+      // Test başına ortalama üretilen token sayısı
+      const avgTokens =
+        Math.round(
+          (run.results.reduce((sum, r) => sum + (r.totalTokens ?? 0), 0) /
+            Math.max(1, run.results.length)) *
+            100
+        ) / 100;
+
+      // Ortalama cevap süresi (ms) — eski koşularda alan yoksa 0 varsay
+      // (computeEfficiencyIndex undefined/0'ı nötr faktör olarak ele alır)
+      const avgAnswerDurationMs = run.avgAnswerDurationMs ?? 0;
 
       leaderboard.push({
-        modelName: stat.modelConfig.name,
-        provider: stat.modelConfig.provider,
-        totalScore: avgTotalScore,
-        categoryScores: {
-          logic: categoryScores.logic || 0,
-          math: categoryScores.math || 0,
-          ifeval: categoryScores.ifeval || 0,
-          json: categoryScores.json || 0,
-          code: categoryScores.code || 0,
-        },
-        avgTTFT,
-        avgTPS,
+        id: run.modelConfig.id,
+        runId: run.id,
+        modelName: run.modelConfig.name,
+        provider: run.modelConfig.provider,
+        totalScore: run.totalScore,
+        categoryScores,
+        avgTTFT: run.avgTTFT,
+        avgTPS: run.avgTPS,
+        avgAnswerDurationMs,
+        avgTokens,
+        // Biçim Disiplini: eski koşularda alan yoksa 100 varsay (geriye dönük uyumluluk)
+        formatDiscipline: run.formatDiscipline ?? 100,
+        // Verimlilik: kalite × hız bonusu (TPS + cevap süresi karışımı)
+        efficiencyIndex: computeEfficiencyIndex(
+          run.totalScore,
+          run.avgTPS,
+          avgAnswerDurationMs
+        ),
+        judgeModelName: run.judgeModelConfig?.name ?? '—',
+        // Testin tamamlandığı tarih-saat (satırın en sağında gösterilir)
+        timestamp: run.timestamp,
       });
     }
 
-    // Sort by totalScore descending
+    // Genel Skor'a göre azalan sırala
     leaderboard.sort((a, b) => b.totalScore - a.totalScore);
 
     return NextResponse.json(leaderboard);
   } catch (error) {
-    console.error('Error generating leaderboard:', error);
+    console.error('Leaderboard oluşturulamadı:', error);
     return NextResponse.json(
-      { error: 'Failed to generate leaderboard' },
+      { error: 'Leaderboard oluşturulamadı' },
       { status: 500 }
     );
   }

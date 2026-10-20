@@ -1,55 +1,101 @@
 import { NextResponse } from 'next/server';
 import { ModelConfig } from '@/types/benchmark';
+import { readModels, writeModel } from '@/lib/db';
 
-// Default LM Studio endpoint
+// LM Studio varsayılan yerel sunucu adresi
 const LM_STUDIO_BASE_URL = 'http://localhost:1234/v1';
 
 /**
- * Generates a deterministic ID for a model based on baseUrl and modelId.
- * This ensures the same model always gets the same ID across discoveries.
+ * baseUrl + modelId'den deterministik ID üretir.
+ * Aynı model her keşifte aynı ID'yi alır (upsert için).
  */
 function generateModelId(baseUrl: string, modelId: string): string {
-  // Create a simple hash-like string by removing non-alphanumeric characters and combining
   const cleanBaseUrl = baseUrl.replace(/[^a-zA-Z0-9]/g, '-');
   const cleanModelId = modelId.replace(/[^a-zA-Z0-9]/g, '-');
   return `lmstudio-${cleanBaseUrl}-${cleanModelId}`;
 }
 
+/**
+ * GET /api/models/discover
+ * LM Studio'nun /v1/models uç noktasından modelleri çeker,
+ * mevcut olmayanları veritabanına kaydeder (tek tıkla ekleme)
+ * ve güncel model listesini döner.
+ */
 export async function GET() {
   try {
-    // Fetch models from LM Studio's OpenAI-compatible endpoint
     const response = await fetch(`${LM_STUDIO_BASE_URL}/models`, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
+      // LM Studio kapalıysa hızlı başarısız ol
+      signal: AbortSignal.timeout(10000),
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch models from LM Studio: ${response.status}`);
+      return NextResponse.json(
+        {
+          error: `LM Studio'ya ulaşılamadı (HTTP ${response.status}). LM Studio'nun açık olduğundan ve yerel sunucunun (localhost:1234) çalıştığından emin olun.`,
+          models: [],
+        },
+        { status: 502 }
+      );
     }
 
     const data = await response.json();
 
-    // LM Studio returns { object: 'list', data: [ { id: 'model-1', ... }, ... ] }
     if (!data.data || !Array.isArray(data.data)) {
-      return NextResponse.json([]); // Return empty array if no models
+      return NextResponse.json(
+        { error: 'LM Studio beklenmeyen bir yanıt formatı döndürdü', models: [] },
+        { status: 502 }
+      );
     }
 
-    const models: ModelConfig[] = data.data.map((model: any) => ({
-      id: generateModelId(LM_STUDIO_BASE_URL, model.id),
-      name: model.id, // Using model ID as name for now; could be enhanced
-      provider: 'lmstudio',
-      baseUrl: LM_STUDIO_BASE_URL,
-      apiKey: undefined, // LM Studio doesn't require API key by default
-      modelId: model.id,
-      isJudge: false, // By default, discovered models are not set as judge
-    }));
+    // Mevcut modelleri al (isJudge bayraklarını korumak için)
+    const existingModels = await readModels();
+    const existingById = new Map<string, ModelConfig>();
+    existingModels.forEach((m) => existingById.set(m.id, m));
 
-    return NextResponse.json(models);
+    const discovered: ModelConfig[] = [];
+    let addedCount = 0;
+
+    for (const model of data.data) {
+      const id = generateModelId(LM_STUDIO_BASE_URL, model.id);
+      const existing = existingById.get(id);
+
+      const modelConfig: ModelConfig = {
+        id,
+        name: model.id,
+        provider: 'lmstudio',
+        baseUrl: LM_STUDIO_BASE_URL,
+        apiKey: undefined,
+        modelId: model.id,
+        // Hakem bayrağı korunur; yeni keşfedilenlerde varsayılan false
+        isJudge: existing?.isJudge ?? false,
+      };
+
+      discovered.push(modelConfig);
+      if (!existing) {
+        await writeModel(modelConfig);
+        addedCount++;
+      } else {
+        // Mevcut kaydı güncelle (isim/baseUrl değişmiş olabilir)
+        await writeModel(modelConfig);
+      }
+    }
+
+    return NextResponse.json({
+      models: discovered,
+      addedCount,
+      message: `${discovered.length} model bulundu, ${addedCount} tanesi yeni eklendi.`,
+    });
   } catch (error) {
-    console.error('Error discovering LM Studio models:', error);
-    // Return empty array on error to avoid breaking the UI
-    return NextResponse.json([]);
+    console.error('LM Studio model keşfi başarısız:', error);
+    return NextResponse.json(
+      {
+        error:
+          'LM Studio\'ya ulaşılamadı. LM Studio\'nun açık olduğundan ve yerel sunucunun (Developer -> Start Server) çalıştığından emin olun.',
+        models: [],
+      },
+      { status: 502 }
+    );
   }
 }

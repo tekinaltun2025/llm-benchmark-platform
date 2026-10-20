@@ -1,124 +1,149 @@
 import { NextResponse } from 'next/server';
-import { ModelConfig, QuestionResult, BenchmarkRun } from '@/types/benchmark';
-import { benchmarkQuestions, deterministicEvaluators } from '@/lib/benchmark-suite';
+import { ModelConfig, RunProgressEvent } from '@/types/benchmark';
 import {
-  callLLMWithStreaming,
-  extractThinkingProcess,
-  evaluateWithJudge,
-} from '@/lib/llm-client';
-import { addRun } from '@/lib/db';
+  getModelById,
+  setModelLoadError,
+  clearModelLoadError,
+} from '@/lib/db';
+import { acquireLock, releaseLock, getLockStatus } from '@/lib/benchmark-lock';
+import { executeBenchmarkRun } from '@/lib/benchmark-runner';
+import { describeError } from '@/lib/retry';
 
-// Question IDs that require judge AI evaluation (logic and code)
-const QUESTIONS_REQUIRING_JUDGE = new Set([1, 2, 9, 10]);
+// Uzun testler için Next.js route timeout'unu yükselt (saniye)
+export const maxDuration = 900;
 
+/**
+ * POST /api/benchmark/run
+ *
+ * Tek modelin 4 sütunlu dinamik benchmark koşusu. Koşu mantığı
+ * src/lib/benchmark-runner.ts içinde; bu route yalnızca:
+ *   1. İsteği doğrular (model ID'leri)
+ *   2. Global kilidi alır (aynı anda tek koşu)
+ *   3. NDJSON akışını kurar ve koşuyu yürütür
+ *
+ * Gövde: { testModelId: string, judgeModelId: string }
+ */
 export async function POST(request: Request) {
+  let testModel: ModelConfig | null = null;
+  let judgeModel: ModelConfig | null = null;
+
   try {
     const body = await request.json();
-    const { testModel, judgeModel } = body;
+    const { testModelId, judgeModelId } = body;
 
-    if (!testModel || !judgeModel) {
+    if (!testModelId || !judgeModelId) {
       return NextResponse.json(
-        { error: 'Missing testModel or judgeModel' },
+        { error: 'testModelId ve judgeModelId zorunludur' },
         { status: 400 }
       );
     }
 
-    // Validate that judgeModel is indeed marked as judge (optional but good)
-    if (!judgeModel.isJudge) {
-      console.warn('Judge model is not marked as isJudge=true');
+    testModel = await getModelById(String(testModelId));
+    judgeModel = await getModelById(String(judgeModelId));
+
+    if (!testModel) {
+      return NextResponse.json(
+        { error: 'Test modeli bulunamadı. Önce Model Yönetimi sekmesinden ekleyin.' },
+        { status: 404 }
+      );
     }
-
-    // Step 0: Warm-up ping to testModel (ignore timing)
-    try {
-      await callLLMWithStreaming(testModel, 'Merhaba', { maxTokens: 5 });
-    } catch (warmupError) {
-      console.warn('Warm-up ping failed:', warmupError);
-      // Continue anyway; maybe the model is already loaded
+    if (!judgeModel) {
+      return NextResponse.json(
+        { error: 'Hakem modeli bulunamadı. Önce Model Yönetimi sekmesinden ekleyin.' },
+        { status: 404 }
+      );
     }
-
-    const results: QuestionResult[] = [];
-    let totalTTFT = 0;
-    let totalTPS = 0;
-
-    for (const question of benchmarkQuestions) {
-      // Phase 1: Get answer from testModel with streaming
-      const llmResult = await callLLMWithStreaming(testModel, question.question);
-      // Extract thinking tags from the answer string (if any)
-      const { answer: cleanedAnswer, thinkingProcess: thinkingFromTags } = extractThinkingProcess(llmResult.answer);
-      // Combine thinking from stream (reasoning_content) and from tags
-      const thinkingParts = [llmResult.thinkingProcess, thinkingFromTags].filter(Boolean);
-      const thinkingProcess = thinkingParts.length > 0 ? thinkingParts.join('\n\n') : null;
-
-      totalTTFT += llmResult.ttft;
-      totalTPS += llmResult.tps;
-
-      // Deterministic evaluation
-      const deterministicScore = deterministicEvaluators[question.id - 1](cleanedAnswer);
-
-      let judgeScore: number | null = null;
-      let judgeReasoning: string | null = null;
-
-      if (QUESTIONS_REQUIRING_JUDGE.has(question.id)) {
-        const judgeResult = await evaluateWithJudge(
-          judgeModel,
-          question.question,
-          cleanedAnswer
-        );
-        judgeScore = judgeResult.score;
-        judgeReasoning = judgeResult.reasoning;
-      }
-
-      // Compute final score
-      let finalScore: number;
-      if (judgeScore !== null) {
-        finalScore = Math.round((deterministicScore + judgeScore) / 2);
-      } else {
-        finalScore = deterministicScore;
-      }
-
-      results.push({
-        questionId: question.id,
-        question: question.question,
-        category: question.category,
-        rawAnswer: llmResult.answer,
-        thinkingProcess,
-        finalAnswer: cleanedAnswer,
-        deterministicScore,
-        judgeScore,
-        finalScore,
-        judgeReasoning,
-        ttft: llmResult.ttft,
-        tps: llmResult.tps,
-      });
-    }
-
-    const totalScore =
-      Math.round(
-        (results.reduce((sum, r) => sum + r.finalScore, 0) / results.length) *
-          100
-      ) / 100;
-    const avgTTFT = totalTTFT / results.length;
-    const avgTPS = totalTPS / results.length;
-
-    const run: BenchmarkRun = {
-      id: `${testModel.id}-${Date.now()}`,
-      modelConfig: testModel,
-      judgeModelConfig: judgeModel,
-      timestamp: Date.now(),
-      results,
-      totalScore,
-      avgTTFT,
-      avgTPS,
-    };
-
-    await addRun(run);
-
-    return NextResponse.json(run, { status: 201 });
   } catch (error) {
-    console.error('Error running benchmark:', error);
+    console.error('İstek gövdesi ayrıştırılamadı:', error);
     return NextResponse.json(
-      { error: 'Failed to run benchmark' },
-      { status: 500 }
+      { error: 'Geçersiz istek gövdesi' },
+      { status: 400 }
     );
   }
+
+  // ─── Global test kilidi: aynı anda yalnızca bir benchmark koşabilir ──
+  // acquireLock senkron çalıştığı için Node.js event loop'unda atomiktir;
+  // eşzamanlı iki istekten yalnızca ilki kilidi alabilir, diğeri 409 alır.
+  if (!acquireLock(testModel.name)) {
+    const status = getLockStatus();
+    return NextResponse.json(
+      {
+        error: `Şu anda başka bir benchmark testi çalışıyor (${status.lockedBy}). Lütfen o test tamamlanana kadar bekleyin.`,
+        lockedBy: status.lockedBy,
+        lockedAt: status.lockedAt,
+      },
+      { status: 409 }
+    );
+  }
+
+  // Test ve hakem modellerini closure'a sabitle (TS null-check için)
+  const testModelConfig = testModel;
+  const judgeModelConfig = judgeModel;
+
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const sendEvent = (event: RunProgressEvent) => {
+        controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'));
+      };
+
+      try {
+        const outcome = await executeBenchmarkRun(
+          testModelConfig,
+          judgeModelConfig,
+          sendEvent
+        );
+
+        if (outcome.status === 'completed' && outcome.run) {
+          // Başarılı test: varsa eski "çalışmıyor" notunu temizle
+          await clearModelLoadError(
+            testModelConfig.provider,
+            testModelConfig.modelId
+          );
+          sendEvent({
+            type: 'complete',
+            progress: 100,
+            message: `Test tamamlandı! Genel Skor: ${outcome.run.totalScore}/100 | Biçim Disiplini: ${outcome.run.formatDiscipline}%`,
+            run: outcome.run,
+          });
+        }
+        // 'stopped' ve 'error' olayları executeBenchmarkRun içinde
+        // zaten emit edildi; burada ek bir şey yapmaya gerek yok.
+      } catch (error) {
+        console.error('Benchmark koşusu başarısız:', error);
+        // Model çalışmadı: kalıcı "çalışmıyor" notu yaz
+        const errorDetail =
+          error instanceof Error ? error.message : String(error);
+        const reason = describeError(error);
+        await setModelLoadError(
+          testModelConfig.provider,
+          testModelConfig.modelId,
+          `Test başarısız: ${reason}`
+        );
+        sendEvent({
+          type: 'error',
+          progress: 0,
+          message: `Test başarısız oldu (3 deneme yapıldı). Sebep: ${reason}`,
+        });
+      } finally {
+        // Kilit, koşu nasıl sonuçlanırsa sonuçlansın (başarı / hata / istemci
+        // bağlantıyı kesti / durdurma) mutlaka serbest bırakılmalı.
+        releaseLock();
+        try {
+          controller.close();
+        } catch {
+          // Stream zaten kapatılmış olabilir (ör. istemci bağlantıyı kesti)
+        }
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'X-Accel-Buffering': 'no',
+    },
+  });
 }

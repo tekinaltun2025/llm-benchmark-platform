@@ -1,14 +1,23 @@
 import { promises as fs } from "fs";
 import path from "path";
-import { ModelConfig, BenchmarkRun } from "../types/benchmark";
+import { ModelConfig, BenchmarkRun, BenchmarkQuestion } from "../types/benchmark";
 
 const DB_PATH = path.join(process.cwd(), "data", "benchmark_db.json");
 
+/** JSON veritabanının şeması. */
+interface DBSchema {
+  models: ModelConfig[];
+  runs: BenchmarkRun[];
+  customQuestions: BenchmarkQuestion[];
+}
+
+const EMPTY_DB: DBSchema = { models: [], runs: [], customQuestions: [] };
+
 /**
- * Ensures the data directory and db.json file exist.
- * If the file doesn't exist, it creates an empty structure with models and runs arrays.
+ * data dizininin ve benchmark_db.json dosyasının varlığini sağlar.
+ * Dosya yoksa boş yapıyla otomatik oluşturur.
  */
-async function ensureDB() {
+async function ensureDB(): Promise<void> {
   const dir = path.dirname(DB_PATH);
   try {
     await fs.access(dir);
@@ -18,85 +27,99 @@ async function ensureDB() {
   try {
     await fs.access(DB_PATH);
   } catch {
-    await fs.writeFile(
-      DB_PATH,
-      JSON.stringify({ models: [], runs: [] }),
-      "utf8"
-    );
+    await fs.writeFile(DB_PATH, JSON.stringify(EMPTY_DB, null, 2), "utf8");
   }
 }
 
 /**
- * Reads the database and returns an object containing models and runs.
- * If the file doesn't exist or is invalid, returns { models: [], runs: [] }.
+ * Veritabanını okur. Dosya yoksa veya bozuksa boş yapı döner.
  */
-export async function readDB(): Promise<{
-  models: ModelConfig[];
-  runs: BenchmarkRun[];
-}> {
+export async function readDB(): Promise<DBSchema> {
   await ensureDB();
   try {
     const data = await fs.readFile(DB_PATH, "utf8");
     const parsed = JSON.parse(data);
-    // Ensure we have the expected structure
     return {
       models: Array.isArray(parsed.models) ? parsed.models : [],
       runs: Array.isArray(parsed.runs) ? parsed.runs : [],
+      customQuestions: Array.isArray(parsed.customQuestions)
+        ? parsed.customQuestions
+        : [],
     };
   } catch (error) {
-    console.error("Failed to read benchmark DB:", error);
-    return { models: [], runs: [] };
+    console.error("Veritabanı okunamadı:", error);
+    return { ...EMPTY_DB };
   }
 }
 
 /**
- * Writes the entire database object.
- * @param data - An object containing models and runs arrays.
+ * Veritabanının tamamını yazar.
  */
-export async function writeDB(data: {
-  models: ModelConfig[];
-  runs: BenchmarkRun[];
-}): Promise<void> {
+export async function writeDB(data: DBSchema): Promise<void> {
   await ensureDB();
   try {
-    await fs.writeFile(
-      DB_PATH,
-      JSON.stringify(data, null, 2),
-      "utf8"
-    );
+    await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2), "utf8");
   } catch (error) {
-    console.error("Failed to write benchmark DB:", error);
+    console.error("Veritabanına yazılamadı:", error);
     throw error;
   }
 }
 
-/**
- * Reads all models from the database.
- */
+// ─── Model işlemleri ────────────────────────────────────────────────
+
+/** Tüm kayıtlı modelleri döner. */
 export async function readModels(): Promise<ModelConfig[]> {
   const db = await readDB();
   return db.models;
 }
 
-/**
- * Writes a model to the database (creates or updates).
- * @param model - The model configuration to write.
- */
-export async function writeModel(model: ModelConfig): Promise<void> {
-  const db = await readDB();
-  const index = db.models.findIndex((m) => m.id === model.id);
-  if (index >= 0) {
-    db.models[index] = model;
-  } else {
-    db.models.push(model);
-  }
-  await writeDB(db);
+/** ID'ye göre tek bir model döner. */
+export async function getModelById(id: string): Promise<ModelConfig | null> {
+  const models = await readModels();
+  return models.find((m) => m.id === id) ?? null;
 }
 
 /**
- * Deletes a model from the database by its ID.
- * @param id - The ID of the model to delete.
+ * Modeli oluşturur veya günceller (upsert) ve DB'de temsil edilen
+ * GERÇEK kaydı döner. Aynı (provider, modelId) çiftinden ikinci bir
+ * kayıt asla oluşmaz — dönen kayıt kullanıldığında aynı modelin
+ * koşuları her zaman aynı DB kimliği altında toplanır.
  */
+export async function writeModel(model: ModelConfig): Promise<ModelConfig> {
+  const db = await readDB();
+  // 1) Aynı ID'li kayıt varsa güncelle
+  const index = db.models.findIndex((m) => m.id === model.id);
+  if (index >= 0) {
+    db.models[index] = model;
+    await writeDB(db);
+    return model;
+  }
+  // 2) Duplicate koruması: aynı (provider, modelId) çiftinden başka bir kayıt
+  //    varsa YENİ kayıt oluşturulmaz; mevcut kayıt güncellenir.
+  const duplicateIndex = db.models.findIndex(
+    (m) =>
+      m.provider === model.provider &&
+      m.modelId.toLowerCase() === model.modelId.toLowerCase()
+  );
+  if (duplicateIndex >= 0) {
+    // Mevcut kaydın kimliğini koru (koşular bu ID'ye bağlı);
+    // yalnızca ad ve hakem bayrağı tazelenir.
+    const existing = db.models[duplicateIndex];
+    const updated: ModelConfig = {
+      ...model,
+      id: existing.id,
+      isJudge: existing.isJudge || model.isJudge,
+    };
+    db.models[duplicateIndex] = updated;
+    await writeDB(db);
+    return updated;
+  }
+  db.models.push(model);
+  await writeDB(db);
+  return model;
+}
+
+/** ID ile model siler. */
 export async function deleteModel(id: string): Promise<void> {
   const db = await readDB();
   db.models = db.models.filter((m) => m.id !== id);
@@ -104,32 +127,132 @@ export async function deleteModel(id: string): Promise<void> {
 }
 
 /**
- * Adds a new BenchmarkRun to the database.
- * @param run - The BenchmarkRun to add.
+ * Bir modelin "çalışmıyor" notunu yazar (ör. yükleme hatası).
+ * Model kayıtlı değilse sessizce yok sayılır (kütüphane modeli
+ * henüz DB'ye eklenmemiş olabilir).
  */
-export async function addRun(run: BenchmarkRun): Promise<void> {
+export async function setModelLoadError(
+  provider: string,
+  modelId: string,
+  errorMessage: string
+): Promise<void> {
   const db = await readDB();
-  db.runs.push(run);
+  const target = db.models.find(
+    (m) =>
+      m.provider === provider &&
+      m.modelId.toLowerCase() === modelId.toLowerCase()
+  );
+  if (!target) return;
+  target.lastLoadError = errorMessage.slice(0, 500);
+  target.lastLoadErrorAt = Date.now();
   await writeDB(db);
 }
 
 /**
- * Gets all runs for a specific model (by modelConfig.id).
- * @param modelId - The ID of the model.
+ * Modelin "çalışmıyor" notunu temizler — başarılı bir test/yükleme
+ * sonrası çağrılır. Model kayıtlı değilse sessizce yok sayılır.
  */
+export async function clearModelLoadError(
+  provider: string,
+  modelId: string
+): Promise<void> {
+  const db = await readDB();
+  const target = db.models.find(
+    (m) =>
+      m.provider === provider &&
+      m.modelId.toLowerCase() === modelId.toLowerCase()
+  );
+  if (!target) return;
+  delete target.lastLoadError;
+  delete target.lastLoadErrorAt;
+  await writeDB(db);
+}
+
+/**
+ * Bir modeli "Aktif Hakem Model" olarak atar.
+ * Tek bir aktif hakem olabileceği için diğerlerinin isJudge bayrağı kaldırılır.
+ */
+export async function setJudgeModel(id: string): Promise<ModelConfig | null> {
+  const db = await readDB();
+  const target = db.models.find((m) => m.id === id);
+  if (!target) return null;
+  db.models = db.models.map((m) => ({ ...m, isJudge: m.id === id }));
+  await writeDB(db);
+  return target;
+}
+
+// ─── Koşu (run) işlemleri ───────────────────────────────────────────
+
+/**
+ * Yeni bir benchmark koşusu kaydeder.
+ *
+ * "En son test geçerli" politikası: Aynı GERÇEK model için yeni bir koşu
+ * kaydedildiğinde, o modelin önceki tüm koşuları silinir. Kimlik eşleştirmesi
+ * DB kayıt ID'sine değil, gerçek model kimliğine (provider + modelId)
+ * göre yapılır — böylece aynı model farklı kayıt yollarından (kütüphane
+ * seçimi, toplu test, manuel ekleme) test edilse bile eski koşuları
+ * temizlenir ve leaderboard'da asla ikinci bir satır oluşmaz.
+ */
+export async function addRun(run: BenchmarkRun): Promise<void> {
+  const db = await readDB();
+  const identity = (r: BenchmarkRun) =>
+    `${r.modelConfig.provider}:${r.modelConfig.modelId.toLowerCase()}`;
+  const newIdentity = identity(run);
+  db.runs = db.runs.filter((r) => identity(r) !== newIdentity);
+  db.runs.push(run);
+  await writeDB(db);
+}
+
+/** Bir modele ait tüm koşuları döner. */
 export async function getRunsByModel(modelId: string): Promise<BenchmarkRun[]> {
   const db = await readDB();
   return db.runs.filter((run) => run.modelConfig.id === modelId);
 }
 
-/**
- * Gets the latest run for a specific model.
- * @param modelId - The ID of the model.
- */
-export async function getLatestRunByModel(modelId: string): Promise<BenchmarkRun | null> {
+/** Bir modele ait en güncel koşuyu döner. */
+export async function getLatestRunByModel(
+  modelId: string
+): Promise<BenchmarkRun | null> {
   const runs = await getRunsByModel(modelId);
   if (runs.length === 0) return null;
-  // Sort by timestamp descending and return the first
   runs.sort((a, b) => b.timestamp - a.timestamp);
   return runs[0];
+}
+
+/** Bir koşu ID'sine göre koşuyu döner (detay modalı için). */
+export async function getRunById(runId: string): Promise<BenchmarkRun | null> {
+  const db = await readDB();
+  return db.runs.find((r) => r.id === runId) ?? null;
+}
+
+// ─── Özel soru işlemleri ────────────────────────────────────────────
+
+/** Kullanıcı tanımlı tüm özel soruları döner. */
+export async function readCustomQuestions(): Promise<BenchmarkQuestion[]> {
+  const db = await readDB();
+  return db.customQuestions;
+}
+
+/** Yeni bir özel soru ekler. Standart soru ID'leriyle (1-10) çakışmaması için
+ *  ID'ler 100'den başlayarak atanır. */
+export async function addCustomQuestion(
+  question: Omit<BenchmarkQuestion, "id" | "isCustom">
+): Promise<BenchmarkQuestion> {
+  const db = await readDB();
+  const maxId = db.customQuestions.reduce((max, q) => Math.max(max, q.id), 100);
+  const newQuestion: BenchmarkQuestion = {
+    ...question,
+    id: maxId + 1,
+    isCustom: true,
+  };
+  db.customQuestions.push(newQuestion);
+  await writeDB(db);
+  return newQuestion;
+}
+
+/** ID ile özel soru siler. */
+export async function deleteCustomQuestion(id: number): Promise<void> {
+  const db = await readDB();
+  db.customQuestions = db.customQuestions.filter((q) => q.id !== id);
+  await writeDB(db);
 }
