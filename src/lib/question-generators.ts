@@ -524,6 +524,185 @@ function generateQ16(): BenchmarkQuestion {
   };
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// MADDE 4 — ZOR VARYANT SORULAR (ID 20-27)
+// Her ana kategoriden bir "zor" soru: mevcut kolay sorularla aynı
+// kategoride ama daha büyük sayılar / daha uzun kurallar / daha derin
+// zincirler. Kategori skoru = kolay + zor ortalaması → modeller
+// 100/50 gibi kaba eşitlenmek yerine 92.5 / 85 / 67.5 gibi ayrışır.
+// ═══════════════════════════════════════════════════════════════════
+
+/**
+ * Q20 — ZOR mantık: 3 değişkenli tam rank fiyat sistemi.
+ * a + b = T1, b + c = T2, a + c = T3 → a = (T1 − T2 + T3) / 2
+ * Üç denklem lineer bağımsızdır (rank 3) → a tek çözümdür.
+ */
+function generateQ20(): BenchmarkQuestion {
+  const [itemA, itemB, itemC] = pickDistinct(ITEM_PAIRS.flat(), 3);
+  const a = randInt(20, 90);
+  const c = randInt(5, a - 5);
+  const b = randInt(10, 80);
+  const T1 = a + b;
+  const T2 = b + c;
+  const T3 = a + c;
+  return {
+    id: 20,
+    category: "logic",
+    isDynamic: true,
+    question: `Bir mağazada üç ürün vardır: ${itemA}, ${itemB} ve ${itemC}. ${itemA.charAt(0).toUpperCase() + itemA.slice(1)} ile ${itemB} toplamda ${T1} TL'dir. ${itemB.charAt(0).toUpperCase() + itemB.slice(1)} ile ${itemC} toplamda ${T2} TL'dir. ${itemA.charAt(0).toUpperCase() + itemA.slice(1)} ile ${itemC} toplamda ${T3} TL'dir. ${itemA.charAt(0).toUpperCase() + itemA.slice(1)} ürününün tek başına fiyatı kaç TL'dir? Cevabını kısaca açıklayıp en sonda 'CEVAP: <sayı>' formatında yaz.`,
+    expectedAnswer: String(a),
+    evaluationParams: { expected: a, itemA, itemB, itemC, T1, T2, T3 },
+  };
+}
+
+/**
+ * Q21 — ZOR matematik: bileşik yüzdesel indirim + KDV.
+ * Fiyat F → %r1 indirim → %r2 ek indirim → %18 KDV ekle.
+ * Tüm adımlar tam sayı çıksın diye F = 200·k seçilir.
+ */
+function generateQ21(): BenchmarkQuestion {
+  const F = randInt(4, 20) * 200; // 800..4000, 200'ün katı
+  const r1 = pick([10, 20, 25]);
+  const r2 = pick([10, 20]);
+  const afterR1 = Math.round(F * (1 - r1 / 100));
+  const afterR2 = Math.round(afterR1 * (1 - r2 / 100));
+  const withVat = Math.round(afterR2 * 1.18);
+  return {
+    id: 21,
+    category: "math",
+    isDynamic: true,
+    question: `Bir ürünün etiket fiyatı ${F} TL'dir. Ürüne önce %${r1} indirim yapılıyor, ardından indirimli fiyat üzerinden ek olarak %${r2} indirim uygulanıyor. Son fiyat üzerine %18 KDV eklenerek ödenen tutar belirleniyor. Müşteri kasada toplam kaç TL öder? Adım adım hesapla ve cevabın en sonuna mutlaka 'SONUÇ: <sayı>' yaz.`,
+    expectedAnswer: String(withVat),
+    evaluationParams: { expected: withVat, F, r1, r2, afterR1, afterR2 },
+  };
+}
+
+/**
+ * Q22 — ZOR IFEval: 4 kural aynı anda (paragraf).
+ * Yasaklı kelime 4, cümle 4, başlangıç harfleri 4, ayrıca kelime sınırı.
+ */
+function generateQ22(): BenchmarkQuestion {
+  const forbidden = pickDistinct(FORBIDDEN_WORD_POOL, 4);
+  const letters = pickDistinct(LETTER_POOL, 4).sort();
+  const topic = pick(TOPIC_POOL);
+  const wordMin = randInt(8, 12);
+  return {
+    id: 22,
+    category: "ifeval",
+    isDynamic: true,
+    question: `Aşağıdaki kurallara HARİFEN uyarak bir paragraf yaz: 1) '${forbidden[0]}', '${forbidden[1]}', '${forbidden[2]}' ve '${forbidden[3]}' kelimelerini HİÇ kullanma. 2) Paragraf TAM 4 cümleden oluşsun. 3) Cümleler sırasıyla '${letters.join("', '")}' harfleriyle başlasın. 4) Her cümle EN AZ ${wordMin} kelimeden oluşsun. 5) Konu: ${topic}. Sadece paragrafı yaz, başka açıklama ekleme.`,
+    evaluationParams: {
+      forbiddenWords: forbidden,
+      sentenceCount: 4,
+      startingLetters: letters,
+      wordMin,
+    },
+  };
+}
+
+/**
+ * Q23 — ZOR JSON: 4 alanlı iç içe olmayan ama çok adımlı hesap.
+ * 3 çalışan: maaş, zam, prim → net toplam maliyet.
+ */
+function generateQ23(): BenchmarkQuestion {
+  const s1 = randInt(15, 30) * 1000;
+  const s2 = randInt(15, 30) * 1000;
+  const s3 = randInt(15, 30) * 1000;
+  const raise = pick([10, 15, 20]);
+  const bonus = randInt(2, 8) * 500;
+  const new1 = Math.round(s1 * (1 + raise / 100));
+  const new2 = Math.round(s2 * (1 + raise / 100));
+  const new3 = Math.round(s3 * (1 + raise / 100));
+  const total = new1 + new2 + new3 + 3 * bonus;
+  return {
+    id: 23,
+    category: "json",
+    isDynamic: true,
+    question: `Bir şirkette 3 çalışan vardır. Maaşları sırasıyla ${s1} TL, ${s2} TL ve ${s3} TL'dir. Hepsiine %${raise} zam yapılıyor. Ayrıca her çalışana ${bonus} TL performans primi veriliyor. Zam ve primler dahil toplam maliyet kaç TL olur? SADECE şu JSON formatında cevap ver, başka hiçbir metin ekleme: {"newSalary1": <sayı>, "newSalary2": <sayı>, "newSalary3": <sayı>, "totalCost": <sayı>}`,
+    expectedAnswer: `newSalary1=${new1}, newSalary2=${new2}, newSalary3=${new3}, totalCost=${total}`,
+    evaluationParams: { new1, new2, new3, total },
+  };
+}
+
+/**
+ * Q24 — ZOR needle: uzun haystack (2x) + şifre ortada değil, %85 konumda.
+ */
+function generateQ24(): BenchmarkQuestion {
+  const secret = pick(NEEDLE_WORDS);
+  const haystack = generateHaystack(160, 0.85, secret);
+  return {
+    id: 24,
+    category: "needle",
+    isDynamic: true,
+    question: `Aşağıdaki uzun metni dikkatlice oku ve içinde geçen GİZLİ ŞİFREYİ bul. Cevabın SADECE şifreyi içersin, başka hiçbir açıklama yazma:\n\n${haystack}`,
+    expectedAnswer: secret,
+    evaluationParams: { needle: secret },
+  };
+}
+
+/**
+ * Q25 — ZOR Türkçe: iki deyimi karşılaştırmalı açıklama.
+ * İki deyimin ortak noktası + farkı + ANLAM etiketi.
+ */
+function generateQ25(): BenchmarkQuestion {
+  const [idiom1, meaning1, kws1] = pick(TURKISH_IDIOMS);
+  let [idiom2, meaning2, kws2] = pick(TURKISH_IDIOMS);
+  if (idiom2 === idiom1) {
+    const idx = TURKISH_IDIOMS.findIndex((e) => e[0] === idiom1);
+    [idiom2, meaning2, kws2] = TURKISH_IDIOMS[(idx + 1) % TURKISH_IDIOMS.length];
+  }
+  const keywords = [...kws1.slice(0, 2), ...kws2.slice(0, 2)];
+  return {
+    id: 25,
+    category: "turkish",
+    isDynamic: true,
+    question: `Aşağıdaki iki Türkçe deyimin anlamını açıkla ve hangi durumlarda kullanıldıklarını 2-3 cümleyle karşılaştır:\n\n1) "${idiom1}"\n2) "${idiom2}"\n\nAçıklamalarının sonuna 'ANLAM: <birinci deyimin özünü veren en önemli kelime>' formatında tek bir anahtar kelime yaz.`,
+    expectedAnswer: kws1[0],
+    evaluationParams: { idiom: idiom1, idiom2, meaning: meaning1, meaning2, keywords },
+  };
+}
+
+/**
+ * Q26 — ZOR mantık (adversarial değil): hız-zaman-mesafe zinciri.
+ * Tren A ve B karşı yönlerden: buluşma süresi + fark mesafesi.
+ */
+function generateQ26(): BenchmarkQuestion {
+  const vA = randInt(60, 120);
+  const vB = randInt(40, 100);
+  const dist = (vA + vB) * randInt(2, 6); // buluşma saati tam çıksın
+  const hours = dist / (vA + vB);
+  const diff = Math.abs(vA - vB) * hours;
+  return {
+    id: 26,
+    category: "logic",
+    isDynamic: true,
+    question: `İki şehir arasındaki mesafe ${dist} km'dir. A şehrindeki tren saatte ${vA} km hızla, B şehrindeki tren aynı anda ters yönde saatte ${vB} km hızla yola çıkar. İki tren kaç saat sonra karşılaşır ve karşılaştıklarında hızlı tren, yavaş trenden kaç km daha fazla yol gitmiştir? İki cevabını da 'CEVAP: <saat> | <km>' formatında yaz.`,
+    expectedAnswer: String(hours),
+    evaluationParams: { expected: hours, vA, vB, dist, diff },
+  };
+}
+
+/**
+ * Q27 — ZOR matematik: işçi-havuz problemi (ters oran).
+ * n işçi d günde bitirir → n+k işçi kaç günde bitirir?
+ */
+function generateQ27(): BenchmarkQuestion {
+  const n = randInt(4, 12);
+  const d = randInt(6, 20);
+  const k = randInt(2, 6);
+  const totalWork = n * d;
+  const newWorkers = n + k;
+  const newDays = Math.round((totalWork / newWorkers) * 100) / 100; // 2 ondalık
+  return {
+    id: 27,
+    category: "math",
+    isDynamic: true,
+    question: `${n} işçi bir işi ${d} günde bitirebiliyor. Aynı işi ${newWorkers} işçi kaç günde bitirir? (İşçi başına verim aynıdır; cevap ondalıklı olabilir.) Adım adım hesapla ve cevabın en sonuna mutlaka 'SONUÇ: <sayı>' yaz.`,
+    expectedAnswer: String(newDays),
+    evaluationParams: { expected: newDays, n, d, k, newWorkers },
+  };
+}
+
 /**
  * Adversarial baskı mesajını üretir (Tur B).
  * Modelin Tur A cevabına göre kişiselleştirilir.
@@ -565,6 +744,15 @@ export function generateRunQuestions(includeNeedle = true): BenchmarkQuestion[] 
     generateQ14(),
     generateQ15(),
     generateQ16(),
+    // Madde 4: zor varyantlar — kategori başına 2. soru
+    generateQ20(),
+    generateQ21(),
+    generateQ22(),
+    generateQ23(),
+    generateQ24(),
+    generateQ25(),
+    generateQ26(),
+    generateQ27(),
     // Q9, Q10: kod soruları — statik metin, dinamik değerlendirme (sandbox)
     {
       id: 9,

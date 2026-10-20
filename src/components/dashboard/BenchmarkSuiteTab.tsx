@@ -27,6 +27,15 @@ export default function BenchmarkSuiteTab() {
   const [status, setStatus] = useState<string>('');
   const [statusType, setStatusType] = useState<'info' | 'success' | 'error'>('info');
 
+  // ─── Madde 3: Standart soru seçimi ─────────────────────
+  // Default: TÜM standart sorular seçili. DB'de kayıt yoksa
+  // (null) hepsi seçili kabul edilir.
+  const [enabledIds, setEnabledIds] = useState<number[]>(
+    benchmarkQuestions.map((q) => q.id)
+  );
+  const [selectionLoaded, setSelectionLoaded] = useState(false);
+  const [selectionSaving, setSelectionSaving] = useState(false);
+
   // Yeni soru formu
   const [form, setForm] = useState<{
     question: string;
@@ -56,6 +65,85 @@ export default function BenchmarkSuiteTab() {
   useEffect(() => {
     fetchCustomQuestions();
   }, [fetchCustomQuestions]);
+
+  // Madde 3: Kayıtlı soru seçimini yükle
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/questions/selection');
+        if (res.ok) {
+          const body: { enabledQuestionIds: number[] | null } = await res.json();
+          if (body.enabledQuestionIds !== null) {
+            setEnabledIds(body.enabledQuestionIds);
+          }
+        }
+      } catch (e) {
+        console.error('Soru seçimi yüklenemedi:', e);
+      } finally {
+        setSelectionLoaded(true);
+      }
+    })();
+  }, []);
+
+  // Madde 3: Tek sorunun seçimini değiştir + DB'ye kaydet
+  const toggleQuestion = async (id: number) => {
+    const next = enabledIds.includes(id)
+      ? enabledIds.filter((qid) => qid !== id)
+      : [...enabledIds, id];
+    if (next.length === 0) {
+      showStatus('En az 1 soru seçili kalmalıdır.', 'error');
+      return;
+    }
+    setEnabledIds(next);
+    setSelectionSaving(true);
+    try {
+      const res = await fetch('/api/questions/selection', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabledQuestionIds: next }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error ?? 'Seçim kaydedilemedi');
+      }
+      showStatus(
+        `Soru seçimi kaydedildi: ${next.length}/${benchmarkQuestions.length} soru testte kullanılacak.`,
+        'success'
+      );
+    } catch (e) {
+      showStatus(e instanceof Error ? e.message : String(e), 'error');
+    } finally {
+      setSelectionSaving(false);
+    }
+  };
+
+  // Madde 3: Tümünü seç / temizle (en az 1 soru kalmalı)
+  const toggleAllQuestions = async () => {
+    const allSelected = enabledIds.length === benchmarkQuestions.length;
+    const next = allSelected
+      ? benchmarkQuestions.slice(0, 1).map((q) => q.id)
+      : benchmarkQuestions.map((q) => q.id);
+    setEnabledIds(next);
+    setSelectionSaving(true);
+    try {
+      const res = await fetch('/api/questions/selection', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabledQuestionIds: next }),
+      });
+      if (!res.ok) throw new Error('Seçim kaydedilemedi');
+      showStatus(
+        allSelected
+          ? 'Tüm seçimler temizlendi (yalnızca Soru 1 aktif).'
+          : 'Tüm sorular seçildi.',
+        'success'
+      );
+    } catch (e) {
+      showStatus(e instanceof Error ? e.message : String(e), 'error');
+    } finally {
+      setSelectionSaving(false);
+    }
+  };
 
   const showStatus = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
     setStatus(message);
@@ -129,26 +217,76 @@ export default function BenchmarkSuiteTab() {
 
         {/* Standart 10 soru */}
         <div className="bg-gray-800/60 rounded-lg p-5 border border-gray-700">
-          <h3 className="font-semibold mb-4 text-gray-200">
-            Standart Test Soruları ({benchmarkQuestions.length} soru)
-          </h3>
+          <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
+            <h3 className="font-semibold text-gray-200">
+              Standart Test Soruları ({benchmarkQuestions.length} soru)
+            </h3>
+            {/* Madde 3: seçim kontrolleri */}
+            <div className="flex items-center gap-3">
+              <span
+                className={`text-xs font-medium ${
+                  enabledIds.length === benchmarkQuestions.length
+                    ? 'text-emerald-300'
+                    : 'text-amber-300'
+                }`}
+              >
+                ✅ {enabledIds.length}/{benchmarkQuestions.length} soru testte aktif
+                {selectionSaving && ' (kaydediliyor...)'}
+              </span>
+              <button
+                onClick={toggleAllQuestions}
+                disabled={selectionSaving || !selectionLoaded}
+                className="text-xs font-medium py-1.5 px-3 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-200 transition-colors"
+              >
+                {enabledIds.length === benchmarkQuestions.length
+                  ? 'Tümünü Kaldır'
+                  : 'Tümünü Seç'}
+              </button>
+            </div>
+          </div>
+          <p className="text-xs text-gray-500 mb-4">
+            İşaretli sorular bir sonraki test koşusunda kullanılır. İşaretsizler atlanır.
+            Seçim otomatik kaydedilir; en az 1 soru seçili kalmalıdır.
+          </p>
           <div className="space-y-4">
-            {benchmarkQuestions.map((q) => (
-              <div key={q.id} className="pb-4 border-b border-gray-700 last:border-b-0 last:pb-0">
+            {benchmarkQuestions.map((q) => {
+              const checked = enabledIds.includes(q.id);
+              return (
+              <div
+                key={q.id}
+                className={`pb-4 border-b border-gray-700 last:border-b-0 last:pb-0 ${
+                  checked ? '' : 'opacity-50'
+                }`}
+              >
                 <div className="flex items-center gap-2 mb-2">
+                  {/* Madde 3: soru seçim kutusu */}
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleQuestion(q.id)}
+                    disabled={selectionSaving}
+                    className="h-4 w-4 accent-sky-500 cursor-pointer flex-shrink-0"
+                    title={checked ? 'Testten çıkar' : 'Teste dahil et'}
+                  />
                   <span className="text-xs px-2 py-0.5 rounded bg-sky-500/20 text-sky-300">
                     Soru {q.id}
                   </span>
                   <span className="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-300">
                     {CATEGORY_LABELS[q.category]}
                   </span>
+                  {!checked && (
+                    <span className="text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-300">
+                      Testte değil
+                    </span>
+                  )}
                 </div>
                 <p className="text-sm text-gray-300 whitespace-pre-wrap">{q.question}</p>
                 <p className="mt-2 text-xs text-gray-500">
                   <b className="text-gray-400">Değerlendirme:</b> {CRITERIA_BY_CATEGORY[q.category]}
                 </p>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 

@@ -112,6 +112,74 @@ export const benchmarkQuestions: BenchmarkQuestion[] = [
     question:
       "[Dinamik] 2 turlu: Tur A'da kitap sayma problemi; Tur B'de yanlış değerle baskı ('Emin misin? Bence X olmalı...'). Direnç: savunursa 100, boyun eğerse 50.",
   },
+  {
+    id: 14,
+    category: "turkish",
+    question:
+      "[Dinamik] Ek yanlışı içeren cümleyi düzeltme — 6 kayıtlı cümle havuzundan rastgele; 'DÜZELTME: <kelime>' etiketiyle yanıt.",
+  },
+  {
+    id: 15,
+    category: "turkish",
+    question:
+      "[Dinamik] Türkçe deyimin anlamını açıklama — 6 deyim havuzundan rastgele; 'ANLAM: <anahtar kelime>' etiketiyle yanıt.",
+  },
+  {
+    id: 16,
+    category: "turkish",
+    question:
+      "[Dinamik] Kurallı özet: rastgele konu + 30-50 kelime sınırı + zorunlu anahtar kelimeler + 'ÖZET:' etiketi.",
+  },
+  // ─── Madde 4: ZOR varyantlar ────────────────────────────
+  {
+    id: 20,
+    category: "logic",
+    question:
+      "[Dinamik][ZOR] Üç ürünlü fiyat sistemi: a+b=T1, b+c=T2, a−c=D → a=? (3 denklemin eşzamanlı çözümü)",
+    expectedAnswer: "(T1−T2+D)/2",
+  },
+  {
+    id: 21,
+    category: "math",
+    question:
+      "[Dinamik][ZOR] Bileşik indirim zinciri: %r1 + %r2 ardışık indirim + %18 KDV — 4 adımlı hesap.",
+  },
+  {
+    id: 22,
+    category: "ifeval",
+    question:
+      "[Dinamik][ZOR] 4 yasaklı kelime + TAM 4 cümle + 4 başlangıç harfi + cümle başına minimum kelime kuralı — 5 kural aynı anda.",
+  },
+  {
+    id: 23,
+    category: "json",
+    question:
+      "[Dinamik][ZOR] 3 çalışanın zammı + primleri: 4 alanlı JSON (newSalary1-3, totalCost) — çok adımlı hesap.",
+  },
+  {
+    id: 24,
+    category: "needle",
+    question:
+      "[Dinamik][ZOR] ~2x uzunlukta haystack (160 cümle) + şifre %85 konumda — derin dikkat testi.",
+  },
+  {
+    id: 25,
+    category: "turkish",
+    question:
+      "[Dinamik][ZOR] İki deyimin karşılaştırmalı anlam açıklaması — ortak nokta + fark + 'ANLAM:' etiketi.",
+  },
+  {
+    id: 26,
+    category: "logic",
+    question:
+      "[Dinamik][ZOR] Karşılıklı tren problemi: buluşma süresi + hız farkı mesafesi — 2 adımlı cevap ('CEVAP: <saat> | <km>').",
+  },
+  {
+    id: 27,
+    category: "math",
+    question:
+      "[Dinamik][ZOR] Ters oran işçi problemi: n işçi d günde bitiriyorsa n+k işçi kaç günde bitirir? (ondalıklı cevap).",
+  },
 ];
 
 /**
@@ -255,11 +323,29 @@ function evaluateIfevalList(
  * Needle değerlendirmesi: cevapta gizli şifre geçiyor mu?
  * Case-insensitive tam eşleşme arar; şifre her koşuda rastgele üretildiği
  * için ezber imkânsızdır.
+ *
+ * Madde 4 — granüler katmanlar:
+ *   - Tam eşleşme → 100
+ *   - Şifre parçalara bölünmüş ("KIRMIZI-KART-7742" → "kırmızı kart 7742") → 75
+ *   - Şifrenin tamamı ama bozuk harf aralıklı (transkripsiyon hatası) → 50
+ *   - Yok → 0
  */
 export function evaluateNeedle(answer: string, needle: string): number {
   const normalizedAnswer = answer.replace(/\s+/g, " ").toUpperCase();
   const normalizedNeedle = needle.replace(/\s+/g, " ").toUpperCase();
-  return normalizedAnswer.includes(normalizedNeedle) ? 100 : 0;
+  if (normalizedAnswer.includes(normalizedNeedle)) return 100;
+
+  // Parçalı eşleşme: şifreyi tire/boşlukla bölünmüş halde ara
+  const parts = normalizedNeedle.split(/[-\s]+/).filter(Boolean);
+  if (parts.length > 1) {
+    const joined = parts.join(" ");
+    if (normalizedAnswer.includes(joined)) return 75;
+    // Tüm parçalar cevapta var ama farklı sıra/aralıklarda
+    const allPartsPresent = parts.every((p) => normalizedAnswer.includes(p));
+    if (allPartsPresent) return 50;
+  }
+
+  return 0;
 }
 
 /**
@@ -389,7 +475,15 @@ export function evaluateDeterministic(
       const label = question.category === "logic" ? "CEVAP" : "SONUÇ";
       const num = extractLabeledNumber(answer, label) ?? extractNumber(answer);
       if (num === null) return 0;
-      return Math.abs(num - expected) < 0.001 ? 100 : 0;
+      // Madde 4 — granüler yakınlık katmanları:
+      //   tam=100 · %1 içinde=85 · %10 içinde=50 · %25 içinde=20 · değil=0
+      const diff = Math.abs(num - expected);
+      if (diff < 0.001) return 100;
+      const relDiff = Math.abs(expected) > 0 ? diff / Math.abs(expected) : diff;
+      if (relDiff <= 0.01) return 85;
+      if (relDiff <= 0.10) return 50;
+      if (relDiff <= 0.25) return 20;
+      return 0;
     }
 
     case "ifeval": {
@@ -455,7 +549,14 @@ export function evaluateDeterministic(
       if (expected === undefined) return 0;
       const num = extractLabeledNumber(answer, "CEVAP") ?? extractNumber(answer);
       if (num === null) return 0;
-      return Math.abs(num - expected) < 0.001 ? 100 : 0;
+      // Madde 4 — granüler yakınlık (logic/math ile aynı katmanlar)
+      const diff = Math.abs(num - expected);
+      if (diff < 0.001) return 100;
+      const relDiff = Math.abs(expected) > 0 ? diff / Math.abs(expected) : diff;
+      if (relDiff <= 0.01) return 85;
+      if (relDiff <= 0.10) return 50;
+      if (relDiff <= 0.25) return 20;
+      return 0;
     }
 
     case "turkish": {

@@ -9,6 +9,9 @@ interface DBSchema {
   models: ModelConfig[];
   runs: BenchmarkRun[];
   customQuestions: BenchmarkQuestion[];
+  /** Madde 3: soru havuzundan seçilen standart soru ID'leri.
+   *  Tanımsız = hiç ayarlanmamış → tüm sorular seçili kabul edilir. */
+  questionSelection?: { enabledQuestionIds: number[] };
 }
 
 const EMPTY_DB: DBSchema = { models: [], runs: [], customQuestions: [] };
@@ -45,6 +48,11 @@ export async function readDB(): Promise<DBSchema> {
       customQuestions: Array.isArray(parsed.customQuestions)
         ? parsed.customQuestions
         : [],
+      questionSelection:
+        parsed.questionSelection &&
+        Array.isArray(parsed.questionSelection.enabledQuestionIds)
+          ? parsed.questionSelection
+          : undefined,
     };
   } catch (error) {
     console.error("Veritabanı okunamadı:", error);
@@ -254,5 +262,51 @@ export async function addCustomQuestion(
 export async function deleteCustomQuestion(id: number): Promise<void> {
   const db = await readDB();
   db.customQuestions = db.customQuestions.filter((q) => q.id !== id);
+  await writeDB(db);
+}
+
+// ─── Madde 2: Toplu koşu silme ──────────────────────────────────────
+
+/**
+ * Verilen run ID'lerine sahip TÜM koşu kayıtlarını kalıcı olarak siler.
+ * @returns Silinen kayıt sayısı.
+ */
+export async function deleteRuns(runIds: string[]): Promise<number> {
+  if (runIds.length === 0) return 0;
+  const db = await readDB();
+  const idSet = new Set(runIds);
+  const before = db.runs.length;
+  db.runs = db.runs.filter((run) => !idSet.has(run.id));
+  const deleted = before - db.runs.length;
+  if (deleted > 0) {
+    await writeDB(db);
+  }
+  return deleted;
+}
+
+// ─── Madde 3: Standart soru seçimi ──────────────────────────────────
+
+/**
+ * Seçili standart soru ID'lerini döner.
+ * Hiç ayarlanmamışsa null döner → çağıran tüm soruların seçili
+ * olduğunu varsayar.
+ */
+export async function readQuestionSelection(): Promise<number[] | null> {
+  const db = await readDB();
+  return db.questionSelection?.enabledQuestionIds ?? null;
+}
+
+/**
+ * Seçili standart soru ID'lerini kaydeder.
+ * Boş dizi reddedilir — en az bir soru seçili olmalıdır.
+ */
+export async function writeQuestionSelection(
+  enabledQuestionIds: number[]
+): Promise<void> {
+  if (!Array.isArray(enabledQuestionIds) || enabledQuestionIds.length === 0) {
+    throw new Error("En az bir soru seçili olmalıdır.");
+  }
+  const db = await readDB();
+  db.questionSelection = { enabledQuestionIds };
   await writeDB(db);
 }

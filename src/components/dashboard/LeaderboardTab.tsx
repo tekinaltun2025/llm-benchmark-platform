@@ -18,7 +18,7 @@ import {
   Bar,
   ResponsiveContainer,
 } from 'recharts';
-import { Trophy, Brain, Calculator, ListChecks, Braces, Code2, Gauge, Timer, X, ChevronUp, ChevronDown, Coins, FileCheck, Search, ShieldAlert, Hourglass, Languages } from 'lucide-react';
+import { Trophy, Brain, Calculator, ListChecks, Braces, Code2, Gauge, Timer, X, ChevronUp, ChevronDown, Coins, FileCheck, Search, ShieldAlert, Hourglass, Languages, Trash2, Radar as RadarIcon } from 'lucide-react';
 
 /** Sıralanabilir sütun anahtarları. */
 type SortKey =
@@ -49,6 +49,8 @@ export default function LeaderboardTab() {
   const [leaderboardData, setLeaderboardData] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
+  const [checkedRunIds, setCheckedRunIds] = useState<string[]>([]);
+  const [deleting, setDeleting] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>('totalScore');
   const [sortAsc, setSortAsc] = useState(false);
   const [detailRun, setDetailRun] = useState<BenchmarkRun | null>(null);
@@ -82,6 +84,56 @@ export default function LeaderboardTab() {
       if (prev.length >= 4) return prev;
       return [...prev, id];
     });
+  };
+
+  // ── Madde 2: Toplu kalıcı silme ──────────────────────────
+  const toggleCheck = (runId: string) => {
+    setCheckedRunIds((prev) =>
+      prev.includes(runId) ? prev.filter((id) => id !== runId) : [...prev, runId]
+    );
+  };
+
+  const allChecked =
+    leaderboardData.length > 0 && checkedRunIds.length === leaderboardData.length;
+
+  const toggleAllChecks = () => {
+    setCheckedRunIds(allChecked ? [] : leaderboardData.map((e) => e.runId));
+  };
+
+  const handleDeleteSelected = async () => {
+    if (checkedRunIds.length === 0) return;
+    const modelNames = leaderboardData
+      .filter((e) => checkedRunIds.includes(e.runId))
+      .map((e) => e.modelName)
+      .join(', ');
+    if (
+      !window.confirm(
+        `Seçilen ${checkedRunIds.length} test sonucu KALICI olarak silinecek:\n\n${modelNames}\n\nBu işlem geri alınamaz. Devam edilsin mi?`
+      )
+    ) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      const res = await fetch('/api/runs', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runIds: checkedRunIds }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? 'Silme başarısız');
+      }
+      const body = await res.json();
+      setCheckedRunIds([]);
+      await loadLeaderboard();
+      window.alert(`${body.deleted} test sonucu kalıcı olarak silindi.`);
+    } catch (error) {
+      console.error('Toplu silme hatası:', error);
+      window.alert(error instanceof Error ? error.message : 'Silme başarısız');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   // Sıralama
@@ -262,24 +314,26 @@ export default function LeaderboardTab() {
         <Trophy className="h-5 w-5 text-yellow-500" /> Başarım Sıralaması
       </h2>
 
-      {/* Karşılaştırma için model seçimi */}
-      <div className="mb-4 flex flex-wrap gap-2">
-        {leaderboardData.map((model) => (
-          <button
-            key={model.id}
-            onClick={() => handleModelToggle(model.id)}
-            className={`px-3 py-1 text-sm rounded-full border transition-colors ${
-              selectedModelIds.includes(model.id)
-                ? 'bg-sky-500/20 border-sky-500 text-sky-300'
-                : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            {model.modelName}
-          </button>
-        ))}
-        <span className="text-xs text-gray-500 self-center">
-          (Radar grafiği için 2-4 model seçin)
+      {/* Madde 2: Toplu silme çubuğu — pill bölümünün yerine geçti */}
+      <div className="mb-4 flex items-center justify-between flex-wrap gap-2">
+        <span className="text-xs text-gray-500">
+          📊 Tüm puanlar <b className="text-gray-300">0-100</b> arası · Radar grafiği için
+          satırdaki <RadarIcon className="inline h-3 w-3 text-sky-400" /> ikonuna tıklayarak 2-4 model seçin
         </span>
+        <button
+          onClick={handleDeleteSelected}
+          disabled={checkedRunIds.length === 0 || deleting}
+          className={`flex items-center gap-2 text-sm font-medium py-2 px-3 rounded transition-colors ${
+            checkedRunIds.length === 0 || deleting
+              ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
+              : 'bg-red-600 hover:bg-red-700 text-white'
+          }`}
+        >
+          <Trash2 className="h-4 w-4" />
+          {deleting
+            ? 'Siliniyor...'
+            : `Seçilenleri Sil (${checkedRunIds.length})`}
+        </button>
       </div>
 
       {/* Grafikler */}
@@ -334,6 +388,16 @@ export default function LeaderboardTab() {
         <table className="min-w-full bg-gray-800/60 divide-y divide-gray-700">
           <thead className="bg-gray-900/80">
             <tr>
+              {/* Madde 2: seçim kutusu sütunu */}
+              <th className="px-4 py-3 text-left">
+                <input
+                  type="checkbox"
+                  checked={allChecked}
+                  onChange={toggleAllChecks}
+                  className="h-4 w-4 accent-sky-500 cursor-pointer"
+                  title="Tümünü seç / temizle"
+                />
+              </th>
               <SortHeader label="#" sortKeyName="rank" />
               <SortHeader label="Model Adı" sortKeyName="modelName" />
               <SortHeader label="Sağlayıcı" sortKeyName="provider" />
@@ -366,6 +430,34 @@ export default function LeaderboardTab() {
                   className="hover:bg-gray-700/50 cursor-pointer transition-colors"
                   title="Detayları görmek için tıklayın"
                 >
+                  {/* Madde 2: satır seçim kutusu (satır tıklamasını tetiklememeli) */}
+                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={checkedRunIds.includes(entry.runId)}
+                      onChange={() => toggleCheck(entry.runId)}
+                      className="h-4 w-4 accent-sky-500 cursor-pointer"
+                      title="Bu test sonucunu silmek için seç"
+                    />
+                  </td>
+                  {/* Madde 1: radar karşılaştırma seçimi satıra taşındı */}
+                  <td className="px-2 py-3" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      onClick={() => handleModelToggle(entry.id)}
+                      className={`p-1.5 rounded transition-colors ${
+                        selectedModelIds.includes(entry.id)
+                          ? 'bg-sky-500/30 text-sky-300'
+                          : 'text-gray-500 hover:text-sky-400 hover:bg-gray-700/50'
+                      }`}
+                      title={
+                        selectedModelIds.includes(entry.id)
+                          ? 'Karşılaştırmadan çıkar'
+                          : 'Radar grafiğinde karşılaştır (maks. 4)'
+                      }
+                    >
+                      <RadarIcon className="h-4 w-4" />
+                    </button>
+                  </td>
                   <td className="px-4 py-3 text-sm font-bold text-white">
                     {originalRank === 1 ? '🥇' : originalRank === 2 ? '🥈' : originalRank === 3 ? '🥉' : originalRank}
                   </td>

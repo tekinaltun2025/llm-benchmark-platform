@@ -33,7 +33,7 @@ import {
   generateRunQuestions,
   generatePressureMessage,
 } from '@/lib/question-generators';
-import { addRun, readCustomQuestions } from '@/lib/db';
+import { addRun, readCustomQuestions, readQuestionSelection } from '@/lib/db';
 import { isStopRequested, getStopReason } from '@/lib/benchmark-lock';
 import { withRetry, describeError } from '@/lib/retry';
 
@@ -63,10 +63,20 @@ export async function executeBenchmarkRun(
   // Her koşuda isimler, sayılar ve beklenen cevaplar rastgele üretilir.
   const dynamicQuestions = generateRunQuestions(true);
 
+  // ─── Madde 3: Soru havuzu seçimi ────────────────────────
+  // Kullanıcı soru havuzunda işaretlediği standart sorularla
+  // testi sınırlayabilir. Seçim yoksa (null) tüm sorular çalışır.
+  // Özel (custom) sorular seçimden bağımsız her zaman eklenir.
+  const enabledIds = await readQuestionSelection();
+  const selectedQuestions =
+    enabledIds === null
+      ? dynamicQuestions
+      : dynamicQuestions.filter((q) => enabledIds.includes(q.id));
+
   // Kullanıcı tanımlı özel sorular da eklenir
   const customQuestions = await readCustomQuestions();
   const allQuestions: BenchmarkQuestion[] = [
-    ...dynamicQuestions,
+    ...selectedQuestions,
     ...customQuestions,
   ];
 
