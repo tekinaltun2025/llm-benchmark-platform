@@ -9,12 +9,12 @@ import {
   XCircle,
   Zap,
   Scale,
-  Library,
   HardDriveDownload,
   Layers,
   Square,
   RefreshCw,
   ClipboardList,
+  Cloud,
 } from 'lucide-react';
 
 /** Kütüphane modeli: yüklü olmayanlar dahil LM Studio indeksindeki tüm modeller. */
@@ -418,6 +418,9 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
     }
   };
 
+  // Harici API modelleri (LM Studio olmayan) — birleşik listede gösterilir
+  const apiModels = models.filter((m) => m.provider !== 'lmstudio');
+
   const testModel = models.find((m) => m.id === testModelId);
   const judgeModel = models.find((m) => m.id === judgeModelId);
 
@@ -453,119 +456,165 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
       </div>
 
       <div className="bg-gray-800/60 rounded-lg p-6 space-y-5 border border-gray-700 max-w-3xl">
-        {/* Model seçimleri */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
-              <Zap className="inline h-4 w-4 mr-1 text-sky-400" />
-              Test Edilecek Model
-            </label>
-            <select
-              value={testModelId}
-              onChange={(e) => setTestModelId(e.target.value)}
-              disabled={isRunning}
-              className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white disabled:opacity-50"
-            >
-              <option value="">-- Model Seçin --</option>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name} ({m.provider === 'lmstudio' ? 'LM Studio' : 'API'})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
-              <Scale className="inline h-4 w-4 mr-1 text-violet-400" />
-              Hakem AI Modeli (Judge)
-            </label>
-            <select
-              value={judgeModelId}
-              onChange={(e) => setJudgeModelId(e.target.value)}
-              disabled={isRunning}
-              className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white disabled:opacity-50"
-            >
-              <option value="">-- Hakem Modeli Seçin --</option>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                  {m.isJudge ? ' ★ (Aktif Hakem)' : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {/* LM Studio kütüphanesi — yüklü olmayan modeller dahil */}
+        {/* ─── Tekilleştirilmiş model seçimi ────────────────────
+            Tek liste: LM Studio kütüphanesi (canlı tarama) +
+            harici API modelleri. Radyo butonuyla tek model seçilir. */}
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">
-            <Library className="inline h-4 w-4 mr-1 text-emerald-400" />
-            LM Studio Kütüphanesi ({libraryModels.length} model — yüklü olmayanlar dahil)
-            {hiddenBrokenCount > 0 && (
-              <span className="text-red-400/80 font-normal">
-                {' '}· {hiddenBrokenCount} çalışmayan model gizlendi
+          <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+            <label className="block text-sm font-medium text-gray-300">
+              <Zap className="inline h-4 w-4 mr-1 text-sky-400" />
+              Test Edilecek Model — listeden seçin
+              <span className="ml-2 text-xs text-gray-500 font-normal">
+                ({libraryModels.length} LM Studio + {apiModels.length} API modeli)
               </span>
-            )}
-          </label>
-          {libraryModels.length === 0 ? (
+            </label>
+            <button
+              onClick={fetchLibrary}
+              disabled={isRunning}
+              className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-emerald-300 disabled:opacity-50 transition-colors"
+              title="LM Studio kütüphanesini yeniden tara"
+            >
+              <RefreshCw className="h-3.5 w-3.5" /> Listeyi Tara
+            </button>
+          </div>
+          {hiddenBrokenCount > 0 && (
+            <p className="text-xs text-red-400/80 mb-1">
+              {hiddenBrokenCount} çalışmayan model gizlendi.
+            </p>
+          )}
+          {libraryModels.length === 0 && apiModels.length === 0 ? (
             <p className="text-xs text-gray-500">
-              Kütüphane bulunamadı. LM Studio ile model indirin veya sunucunun açık olduğundan emin olun.
+              Model bulunamadı. LM Studio ile model indirin veya Model Yönetimi'nden API modeli ekleyin.
             </p>
           ) : (
-            <div className="max-h-40 overflow-y-auto rounded border border-gray-700 divide-y divide-gray-700/50">
-              {libraryModels.map((lm) => (
-                <button
-                  key={lm.libraryKey}
-                  onClick={() => handleSelectLibraryModel(lm)}
-                  disabled={isRunning}
-                  title={
-                    lm.lastLoadError
-                      ? `⚠️ Çalışmıyor: ${lm.lastLoadError}`
-                      : undefined
-                  }
-                  className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-left hover:bg-gray-700/50 disabled:opacity-50 transition-colors ${
-                    lm.lastLoadError ? 'bg-red-500/5' : ''
-                  }`}
-                >
-                  <span className="flex items-center gap-2 min-w-0">
-                    <HardDriveDownload
-                      className={`h-3.5 w-3.5 shrink-0 ${
-                        lm.lastLoadError ? 'text-red-400' : 'text-gray-500'
-                      }`}
+            <div className="max-h-56 overflow-y-auto rounded border border-gray-700 divide-y divide-gray-700/50">
+              {/* LM Studio kütüphane modelleri */}
+              {libraryModels.map((lm) => {
+                const selected = testModelId === lm.id;
+                return (
+                  <label
+                    key={lm.libraryKey}
+                    className={`w-full flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors ${
+                      selected
+                        ? 'bg-sky-500/15'
+                        : lm.lastLoadError
+                          ? 'bg-red-500/5 hover:bg-red-500/10'
+                          : 'hover:bg-gray-700/50'
+                    }`}
+                    title={
+                      lm.lastLoadError
+                        ? `⚠️ Çalışmıyor: ${lm.lastLoadError}`
+                        : 'Seçmek için tıklayın'
+                    }
+                  >
+                    <input
+                      type="radio"
+                      name="testModel"
+                      checked={selected}
+                      onChange={() => handleSelectLibraryModel(lm)}
+                      disabled={isRunning}
+                      className="h-4 w-4 accent-sky-500 shrink-0"
                     />
-                    <span
-                      className={`text-sm truncate ${
-                        lm.lastLoadError ? 'text-red-300' : 'text-gray-200'
-                      }`}
-                    >
-                      {lm.name}
-                    </span>
-                  </span>
-                  <span className="flex items-center gap-1.5 shrink-0">
-                    {lm.lastLoadError && (
-                      <span className="text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-300">
-                        ⚠️ Çalışmıyor
+                    <span className="flex items-center gap-2 min-w-0 flex-1">
+                      <HardDriveDownload
+                        className={`h-3.5 w-3.5 shrink-0 ${
+                          lm.lastLoadError ? 'text-red-400' : 'text-gray-500'
+                        }`}
+                      />
+                      <span
+                        className={`text-sm truncate ${
+                          lm.lastLoadError
+                            ? 'text-red-300'
+                            : selected
+                              ? 'text-sky-200 font-medium'
+                              : 'text-gray-200'
+                        }`}
+                      >
+                        {lm.name}
                       </span>
-                    )}
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded ${
-                        lm.isLoaded
-                          ? 'bg-emerald-500/20 text-emerald-300'
-                          : 'bg-gray-600/40 text-gray-400'
-                      }`}
-                    >
-                      {lm.isLoaded ? '● Yüklü' : '○ Kütüphanede'}
                     </span>
-                  </span>
-                </button>
-              ))}
+                    <span className="flex items-center gap-1.5 shrink-0">
+                      {lm.lastLoadError && (
+                        <span className="text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-300">
+                          ⚠️ Çalışmıyor
+                        </span>
+                      )}
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded ${
+                          lm.isLoaded
+                            ? 'bg-emerald-500/20 text-emerald-300'
+                            : 'bg-gray-600/40 text-gray-400'
+                        }`}
+                      >
+                        {lm.isLoaded ? '● Yüklü' : '○ Kütüphanede'}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+              {/* Harici API modelleri */}
+              {apiModels.map((m) => {
+                const selected = testModelId === m.id;
+                return (
+                  <label
+                    key={m.id}
+                    className={`w-full flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors ${
+                      selected ? 'bg-sky-500/15' : 'hover:bg-gray-700/50'
+                    }`}
+                    title="Seçmek için tıklayın"
+                  >
+                    <input
+                      type="radio"
+                      name="testModel"
+                      checked={selected}
+                      onChange={() => setTestModelId(m.id)}
+                      disabled={isRunning}
+                      className="h-4 w-4 accent-sky-500 shrink-0"
+                    />
+                    <span className="flex items-center gap-2 min-w-0 flex-1">
+                      <Cloud className="h-3.5 w-3.5 shrink-0 text-violet-400" />
+                      <span
+                        className={`text-sm truncate ${
+                          selected ? 'text-sky-200 font-medium' : 'text-gray-200'
+                        }`}
+                      >
+                        {m.name}
+                      </span>
+                    </span>
+                    <span className="text-xs px-2 py-0.5 rounded bg-violet-500/20 text-violet-300 shrink-0">
+                      ☁ API
+                    </span>
+                  </label>
+                );
+              })}
             </div>
           )}
           <p className="mt-1 text-xs text-gray-500">
-            Kütüphaneden bir model seçtiğinizde kaydedilir; test başladığında LM Studio onu
-            otomatik olarak VRAM'e yükler (JIT loading).
+            LM Studio modeli seçtiğinizde kaydedilir; test başladığında otomatik VRAM'e yüklenir (JIT loading).
+            Liste "Listeyi Tara" ile her zaman güncellenebilir.
           </p>
+        </div>
+
+        {/* Hakem modeli — tek dropdown olarak kalır */}
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-2">
+            <Scale className="inline h-4 w-4 mr-1 text-violet-400" />
+            Hakem AI Modeli (Judge)
+          </label>
+          <select
+            value={judgeModelId}
+            onChange={(e) => setJudgeModelId(e.target.value)}
+            disabled={isRunning}
+            className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white disabled:opacity-50"
+          >
+            <option value="">-- Hakem Modeli Seçin --</option>
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+                {m.isJudge ? ' ★ (Aktif Hakem)' : ''}
+              </option>
+            ))}
+          </select>
         </div>
 
         {/* Seçilen modellerin özeti */}

@@ -384,7 +384,12 @@ export default function ModelManagementTab() {
         {/* Kayıtlı modeller listesi */}
         <div className="bg-gray-800/60 rounded-lg p-5 border border-gray-700">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="font-semibold text-gray-200">Kayıtlı Modeller ({models.length})</h3>
+            <h3 className="font-semibold text-gray-200">
+              Kayıtlı Modeller ({models.length})
+              <span className="ml-2 text-xs text-gray-500 font-normal">
+                — Test Koşucusu'ndaki birleşik listede otomatik görünür
+              </span>
+            </h3>
             {activeJudge && (
               <div className="text-xs text-violet-300 flex items-center gap-1">
                 <Scale className="h-3.5 w-3.5" />

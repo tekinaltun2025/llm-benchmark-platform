@@ -35,6 +35,8 @@
     ".next/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "llama.cpp-rocm",
+    "lucebox-hub"
   ]
 }
