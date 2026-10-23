@@ -32,7 +32,7 @@ export async function GET() {
     const leaderboard: LeaderboardEntry[] = [];
 
     for (const run of latestRunByModel.values()) {
-      // Kategori bazlı ortalama puanlar (7 kategori: 5 standart + needle + adversarial)
+      // Kategori bazlı ortalama puanlar (9 kategori: 5 standart + needle + adversarial + coding + turkish_general)
       const categoryScores: LeaderboardEntry['categoryScores'] = {
         logic: 0,
         math: 0,
@@ -42,6 +42,8 @@ export async function GET() {
         needle: 0,
         adversarial: 0,
         turkish: 0,
+        coding: 0,
+        turkish_general: 0,
       };
       const categoryCounts: Record<string, number[]> = {};
       for (const result of run.results) {

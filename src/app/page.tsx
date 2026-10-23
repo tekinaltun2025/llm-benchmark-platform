@@ -6,20 +6,14 @@ import TestRunnerTab from '@/components/dashboard/TestRunnerTab';
 import ModelManagementTab from '@/components/dashboard/ModelManagementTab';
 import BenchmarkSuiteTab from '@/components/dashboard/BenchmarkSuiteTab';
 import TokenDashboardTab from '@/components/dashboard/TokenDashboardTab';
-import { Trophy, Zap, Bot, ClipboardList, Cpu, Loader2 } from 'lucide-react';
+import { Cpu, Loader2 } from 'lucide-react';
 import type { BenchmarkRun } from '@/types/benchmark';
 
-type TabId =
-  | 'leaderboard'
-  | 'testRunner'
-  | 'modelManagement'
-  | 'benchmarkSuite'
-  | 'tokenDashboard';
+type TabId = 'leaderboard' | 'testRunner' | 'benchmarkSuite' | 'tokenDashboard';
 
 const TABS: Array<{ id: TabId; label: string }> = [
   { id: 'leaderboard', label: '🏆 Başarım Sıralaması' },
-  { id: 'testRunner', label: '⚡ Test Koşucusu' },
-  { id: 'modelManagement', label: '🤖 Model & API Yönetimi' },
+  { id: 'testRunner', label: '⚡ Test & Modeller' },
   { id: 'benchmarkSuite', label: '📋 Soru Havuzu' },
   { id: 'tokenDashboard', label: '📊 Token Sayacı' },
 ];
@@ -77,7 +71,9 @@ export default function HomePage() {
 
       {/* İçerik
           TestRunnerTab KOŞUL SIRASINDA unmount edilmez (hidden ile gizlenir);
-          böylece sekme değişse bile NDJSON akışı ve test devam eder. */}
+          böylece sekme değişse bile NDJSON akışı ve test devam eder.
+          Test Koşucusu ve Model Yönetimi tek sekmede birleştirildi:
+          üstte test koşucusu, altta model & API yönetimi. */}
       <main className="max-w-7xl mx-auto">
         {activeTab === 'leaderboard' && (
           <LeaderboardTab key={leaderboardRefreshKey} />
@@ -87,8 +83,8 @@ export default function HomePage() {
             onRunComplete={handleRunComplete}
             onRunningChange={setTestRunning}
           />
+          <ModelManagementTab />
         </div>
-        {activeTab === 'modelManagement' && <ModelManagementTab />}
         {activeTab === 'benchmarkSuite' && <BenchmarkSuiteTab />}
         {activeTab === 'tokenDashboard' && <TokenDashboardTab />}
       </main>

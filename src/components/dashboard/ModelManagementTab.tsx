@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { ModelConfig } from '@/types/benchmark';
+import { API_PROVIDER_TEMPLATES } from '@/lib/provider-templates';
 import {
   Bot,
   Plus,
@@ -15,62 +16,6 @@ import {
   XCircle,
   Cloud,
 } from 'lucide-react';
-
-/**
- * Hazır online API sağlayıcı şablonları — tıklandığında ekleme formunu
- * doldurur. Hakem modeli olarak da kullanılabilir (isJudge mekanizması
- * sağlayıcıdan bağımsız çalışır: OpenAI uyumlu /chat/completions).
- */
-const API_PROVIDER_TEMPLATES: Array<{
-  name: string;
-  baseUrl: string;
-  modelId: string;
-  label: string;
-  hint: string;
-}> = [
-  {
-    name: 'OpenAI GPT-4o',
-    baseUrl: 'https://api.openai.com/v1',
-    modelId: 'gpt-4o',
-    label: 'OpenAI',
-    hint: 'platform.openai.com API anahtarı',
-  },
-  {
-    name: 'Anthropic Claude (OpenAI uyumlu)',
-    baseUrl: 'https://api.anthropic.com/v1',
-    modelId: 'claude-sonnet-4-5',
-    label: 'Anthropic',
-    hint: 'console.anthropic.com API anahtarı',
-  },
-  {
-    name: 'Groq Llama (ücretsiz katman)',
-    baseUrl: 'https://api.groq.com/openai/v1',
-    modelId: 'llama-3.3-70b-versatile',
-    label: 'Groq',
-    hint: 'console.groq.com API anahtarı — çok hızlı',
-  },
-  {
-    name: 'OpenRouter (tüm modeller)',
-    baseUrl: 'https://openrouter.ai/api/v1',
-    modelId: 'openai/gpt-4o',
-    label: 'OpenRouter',
-    hint: 'openrouter.ai — 300+ model tek anahtarla',
-  },
-  {
-    name: 'DeepSeek Chat',
-    baseUrl: 'https://api.deepseek.com/v1',
-    modelId: 'deepseek-chat',
-    label: 'DeepSeek',
-    hint: 'platform.deepseek.com API anahtarı',
-  },
-  {
-    name: 'Google Gemini (OpenAI uyumlu)',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    modelId: 'gemini-2.0-flash',
-    label: 'Gemini',
-    hint: 'aistudio.google.com API anahtarı',
-  },
-];
 
 export default function ModelManagementTab() {
   const [models, setModels] = useState<ModelConfig[]>([]);
@@ -217,9 +162,12 @@ export default function ModelManagementTab() {
   const activeJudge = models.find((m) => m.isJudge);
 
   return (
-    <div className="p-6">
-      <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+    <div className="p-6 pt-2 border-t border-gray-800 mt-2">
+      <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
         <Bot className="h-5 w-5 text-sky-400" /> Model & API Yönetimi
+        <span className="text-xs font-normal text-gray-500">
+          — eklediğiniz modeller yukarıdaki test listesinde otomatik görünür
+        </span>
       </h2>
 
       <div className="space-y-6 max-w-5xl">
@@ -302,13 +250,13 @@ export default function ModelManagementTab() {
                   onClick={() =>
                     setNewModel((prev) => ({
                       ...prev,
-                      name: tpl.name,
+                      name: `${tpl.label} ${tpl.models[0].name}`,
                       provider: 'custom',
                       baseUrl: tpl.baseUrl,
-                      modelId: tpl.modelId,
+                      modelId: tpl.models[0].modelId,
                     }))
                   }
-                  title={tpl.hint}
+                  title={`${tpl.hint} — hazır modeller: ${tpl.models.map((m) => m.modelId).join(', ')}`}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
                     newModel.baseUrl === tpl.baseUrl
                       ? 'bg-sky-500/20 border-sky-500/50 text-sky-300'
@@ -386,9 +334,6 @@ export default function ModelManagementTab() {
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-gray-200">
               Kayıtlı Modeller ({models.length})
-              <span className="ml-2 text-xs text-gray-500 font-normal">
-                — Test Koşucusu'ndaki birleşik listede otomatik görünür
-              </span>
             </h3>
             {activeJudge && (
               <div className="text-xs text-violet-300 flex items-center gap-1">

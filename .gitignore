@@ -24,3 +24,14 @@ Thumbs.db
 logs/
 *.log
 npm-debug.log*
+
+# TypeScript incremental build info
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# Large local model/tooling directories (not part of the app)
+llama.cpp-rocm/
+lucebox-hub/
+
+# Accidental shell-output files
+udo systemctl stop ollama

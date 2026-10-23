@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ModelConfig, RunProgressEvent, BenchmarkRun } from '@/types/benchmark';
+import { ModelConfig, RunProgressEvent, BenchmarkRun, TestCategory } from '@/types/benchmark';
+import { API_PROVIDER_TEMPLATES, ProviderModelTemplate, ProviderTemplate } from '@/lib/provider-templates';
 import {
   Play,
   Loader2,
@@ -10,11 +11,21 @@ import {
   Zap,
   Scale,
   HardDriveDownload,
-  Layers,
   Square,
   RefreshCw,
   ClipboardList,
   Cloud,
+  Plus,
+  Minus,
+  ChevronDown,
+  ChevronRight,
+  KeyRound,
+  Server,
+  AlertTriangle,
+  Menu,
+  X,
+  Check,
+  Radio,
 } from 'lucide-react';
 
 /** Kütüphane modeli: yüklü olmayanlar dahil LM Studio indeksindeki tüm modeller. */
@@ -25,6 +36,17 @@ interface LibraryModel extends ModelConfig {
   /** Modelin son yükleme/çalışma hatası — doluysa "çalışmıyor" */
   lastLoadError?: string;
   lastLoadErrorAt?: number;
+}
+
+/** "Test Edilecek Modeller" listesindeki bir kayıt (DB model kimliğiyle). */
+interface SelectedTestModel {
+  /** DB'deki ModelConfig kimliği — run-all'a bu gönderilir */
+  id: string;
+  /** UI'da gösterilen ad */
+  name: string;
+  provider: 'lmstudio' | 'custom';
+  /** Gerçek model kimliği (LM Studio / API sağlayıcı) */
+  modelId: string;
 }
 
 /** Canlı durum günlüğü satırı: mesaj + renk sınıfı için tür. */
@@ -46,13 +68,19 @@ interface TestRunnerTabProps {
   onRunningChange?: (isRunning: boolean) => void;
 }
 
-export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRunnerTabProps) {
+/** Düşünme (thinking) modeli ipuçları — hakem olarak seçilirse yavaş puanlama uyarısı. */
+const THINKING_MODEL_PATTERN = /think|reason|qwq|-r1|r1-|o1|o3/i;
+
+/** localStorage anahtarı — test listesi sayfa yenilenince kaybolmasın. */
+const TEST_LIST_STORAGE_KEY = 'benchmark.selectedTestModels';
+
+export default function TestRunnerTab({ onRunningChange }: TestRunnerTabProps) {
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [libraryModels, setLibraryModels] = useState<LibraryModel[]>([]);
-  const [testModelId, setTestModelId] = useState('');
+  /** Katalogdan + ile eklenen test edilecek modeller */
+  const [selectedTestModels, setSelectedTestModels] = useState<SelectedTestModel[]>([]);
   const [judgeModelId, setJudgeModelId] = useState('');
   const [isRunning, setIsRunning] = useState(false);
-  const [isBatchRunning, setIsBatchRunning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [statusMessages, setStatusMessages] = useState<StatusMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +96,16 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
   const [syncing, setSyncing] = useState(false);
   /** "Çalışmıyor" notlu olduğu için kütüphane listesinden gizlenen model sayısı */
   const [hiddenBrokenCount, setHiddenBrokenCount] = useState(0);
+  /** Açık olan API sağlayıcı kartları (accordion) */
+  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
+  /** Sağlayıcı bazında girilen API anahtarları (oturumluk) */
+  const [providerApiKeys, setProviderApiKeys] = useState<Record<string, string>>({});
+  /** Anahtar inputu açık olan sağlayıcı etiketi */
+  const [keyInputFor, setKeyInputFor] = useState<string | null>(null);
+  /** Kategori seçim modalı açık mı? */
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
+  /** Seçilen test kategorisi (Genel / Kodlama / Türkçe / Hepsi) */
+  const [selectedCategory, setSelectedCategory] = useState<TestCategory>('all');
   const statusLogRef = useRef<HTMLDivElement>(null);
 
   // Kayıtlı modelleri yükle; isJudge işaretli modeli varsayılan hakem seç
@@ -137,12 +175,41 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
     }
   }, []);
 
+  // İlk yükleme: veriler + localStorage'daki test listesi
   useEffect(() => {
     fetchModels();
     fetchLibrary();
     fetchLockStatus();
     fetchQuestionSelection();
+    try {
+      const stored = localStorage.getItem(TEST_LIST_STORAGE_KEY);
+      if (stored) {
+        const parsed: SelectedTestModel[] = JSON.parse(stored);
+        if (Array.isArray(parsed)) setSelectedTestModels(parsed);
+      }
+    } catch {
+      // Bozuk kayıt — yok say
+    }
   }, [fetchModels, fetchLibrary, fetchLockStatus, fetchQuestionSelection]);
+
+  // Test listesindeki ID'ler DB'de artık yoksa (silinmişse) listeden temizle
+  useEffect(() => {
+    if (models.length === 0) return;
+    setSelectedTestModels((prev) => {
+      const validIds = new Set(models.map((m) => m.id));
+      const filtered = prev.filter((m) => validIds.has(m.id));
+      return filtered.length === prev.length ? prev : filtered;
+    });
+  }, [models]);
+
+  // Test listesi değişince localStorage'a yaz
+  useEffect(() => {
+    try {
+      localStorage.setItem(TEST_LIST_STORAGE_KEY, JSON.stringify(selectedTestModels));
+    } catch {
+      // localStorage dolu/kapalı olabilir — kritik değil
+    }
+  }, [selectedTestModels]);
 
   // Sunucuda başka bir test çalışıyorsa 5 saniyede bir kontrol et;
   // o test bitince uyarı otomatik olarak kalkar.
@@ -167,8 +234,21 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
     ]);
   };
 
-  // Kütüphaneden model seçilince kaydet ve seçili test modeli yap
-  const handleSelectLibraryModel = async (libModel: LibraryModel) => {
+  // ─── Katalog → Test listesi ekleme/çıkarma ──────────────────
+
+  const addToTestList = (item: SelectedTestModel) => {
+    setSelectedTestModels((prev) => {
+      if (prev.some((m) => m.id === item.id)) {
+        addStatus(`ℹ️ "${item.name}" zaten test listesinde.`);
+        return prev;
+      }
+      addStatus(`➕ "${item.name}" test edilecek modeller listesine eklendi.`);
+      return [...prev, item];
+    });
+  };
+
+  // LM Studio kütüphane modelini DB'ye kaydet ve test listesine ekle
+  const handleAddLMStudioModel = async (libModel: LibraryModel) => {
     try {
       const res = await fetch('/api/models/library', {
         method: 'POST',
@@ -181,14 +261,117 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
       }
       const saved: ModelConfig = await res.json();
       await fetchModels();
-      setTestModelId(saved.id);
-      addStatus(
-        `📚 "${saved.name}" kütüphaneden seçildi. Test başladığında LM Studio modeli otomatik yükleyecek.`
-      );
+      addToTestList({
+        id: saved.id,
+        name: saved.name,
+        provider: 'lmstudio',
+        modelId: saved.modelId,
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
+
+  // LM Studio kütüphanesindeki tüm çalışan modelleri tek seferde listeye ekle
+  const handleAddAllLMStudioModels = async () => {
+    for (const lm of libraryModels) {
+      await handleAddLMStudioModel(lm);
+    }
+    addStatus(`📚 ${libraryModels.length} LM Studio modeli test listesine eklendi.`);
+  };
+
+  // Sağlayıcı için anahtar hazır mı? (oturumluk girilmiş VEYA DB'de anahtarlı kayıt var)
+  const providerKeyReady = (tpl: ProviderTemplate): boolean => {
+    if ((providerApiKeys[tpl.label] ?? '').trim()) return true;
+    return models.some(
+      (m) => m.provider === 'custom' && m.baseUrl === tpl.baseUrl && Boolean(m.apiKey)
+    );
+  };
+
+  // API sağlayıcı modelini DB'ye kaydet ve test listesine ekle.
+  // Kayıt DB'de zaten varsa anahtar istenmez; yoksa sağlayıcı için
+  // girilmiş anahtar kullanılır, o da yoksa anahtar inputu açılır.
+  const handleAddApiModel = async (tpl: ProviderTemplate, model: ProviderModelTemplate) => {
+    // DB'de zaten kayıtlı mı? (aynı baseUrl + modelId)
+    const existing = models.find(
+      (m) =>
+        m.provider === 'custom' &&
+        m.baseUrl === tpl.baseUrl &&
+        m.modelId.toLowerCase() === model.modelId.toLowerCase()
+    );
+    if (existing) {
+      addToTestList({
+        id: existing.id,
+        name: existing.name,
+        provider: 'custom',
+        modelId: existing.modelId,
+      });
+      return;
+    }
+
+    const apiKey = (providerApiKeys[tpl.label] ?? '').trim();
+    if (!apiKey) {
+      setKeyInputFor(tpl.label);
+      setExpandedProviders((prev) => new Set(prev).add(tpl.label));
+      addStatus(`🔑 "${tpl.label} ${model.name}" eklemek için önce API anahtarı girin.`);
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: `${tpl.label} ${model.name}`,
+          provider: 'custom',
+          baseUrl: tpl.baseUrl,
+          modelId: model.modelId,
+          apiKey,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error ?? 'API modeli kaydedilemedi');
+      }
+      const saved: ModelConfig = await res.json();
+      await fetchModels();
+      addToTestList({
+        id: saved.id,
+        name: saved.name,
+        provider: 'custom',
+        modelId: saved.modelId,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  // Sağlayıcı anahtarını oturumluk kaydet
+  const handleSaveProviderKey = (tpl: ProviderTemplate) => {
+    const key = (providerApiKeys[tpl.label] ?? '').trim();
+    if (!key) {
+      addStatus(`🔑 ${tpl.label} için anahtar boş — girilen anahtar kaydedilmedi.`, 'error');
+      return;
+    }
+    setKeyInputFor(null);
+    addStatus(`🔑 ${tpl.label} API anahtarı kaydedildi — artık modellerini + ile ekleyebilirsiniz.`);
+  };
+
+  const handleRemoveFromTestList = (item: SelectedTestModel) => {
+    setSelectedTestModels((prev) => prev.filter((m) => m.id !== item.id));
+    addStatus(`➖ "${item.name}" test listesinden çıkarıldı.`);
+  };
+
+  const toggleProviderExpanded = (label: string) => {
+    setExpandedProviders((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+  };
+
+  // ─── Senkronizasyon / durdurma ──────────────────────────────
 
   // Kayıtlı modelleri LM Studio kütüphanesiyle senkronize et:
   // duplicate'leri siler, isimleri düzeltir, ölü kayıtları temizler
@@ -235,14 +418,31 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
     }
   };
 
-  // Toplu test: kütüphanedeki TÜM modelleri sırayla yükle → test → eject
-  const handleStartBatchTest = async () => {
+  // ─── Testi Başlat: ÖNCE kategori seçim modalı açılır ────────
+  // Doğrulamalar yapılır; başarılıysa kategori seçim modalı gösterilir.
+  // Kullanıcı kategoriyi seçince startBenchmark(category) çağrılır.
+  const handleStartTest = () => {
+    if (selectedTestModels.length === 0) {
+      setError('Test edilecek modeller listesi boş. Yukarıdaki katalogdan + ile model ekleyin.');
+      return;
+    }
+    if (!judgeModelId) {
+      setError('Lütfen Hakem AI modelini seçin.');
+      return;
+    }
     if (serverLocked || isRunning) {
       setError('Şu anda başka bir test çalışıyor.');
       return;
     }
+    setShowCategoryModal(true);
+  };
 
-    setIsBatchRunning(true);
+  // ─── Gerçek test koşumu: kategori seçildikten sonra ─────────
+  // /api/benchmark/run-all { modelIds, judgeModelId, selectedCategories }
+  // — seçili modeller sırayla yüklenir (LM Studio), test edilir ve boşaltılır.
+  const startBenchmark = async (category: TestCategory) => {
+    setShowCategoryModal(false);
+
     setIsRunning(true);
     onRunningChange?.(true);
     setProgress(0);
@@ -250,18 +450,32 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
     setError(null);
     setCompleted(null);
     setBatchInfo(null);
-    addStatus('🚀 Toplu test başlatılıyor: kütüphanedeki tüm modeller sırayla test edilecek...');
+    const categoryLabel =
+      category === 'all' ? 'Hepsi' :
+      category === 'general' ? 'Genel' :
+      category === 'coding' ? 'Kodlama' : 'Türkçe';
+    addStatus(
+      `🚀 Test başlatılıyor [${categoryLabel}]: ${selectedTestModels.length} model sırayla test edilecek (${selectedTestModels.map((m) => m.name).join(', ')}).`
+    );
 
     try {
       const res = await fetch('/api/benchmark/run-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(judgeModelId ? { judgeModelId } : {}),
+        body: JSON.stringify({
+          modelIds: selectedTestModels.map((m) => m.id),
+          judgeModelId,
+          selectedCategories: [category],
+        }),
       });
 
       if (!res.ok) {
         const errData = await res.json().catch(() => null);
-        throw new Error(errData?.error ?? `Toplu test başlatılamadı (HTTP ${res.status})`);
+        if (res.status === 409) {
+          setServerLocked(true);
+          setServerLockedBy(errData?.lockedBy ?? null);
+        }
+        throw new Error(errData?.error ?? `Test başlatılamadı (HTTP ${res.status})`);
       }
       if (!res.body) throw new Error('Sunucu akış (stream) döndürmedi');
 
@@ -283,7 +497,10 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
           try {
             const event: RunProgressEvent = JSON.parse(line);
             setProgress(event.progress);
-            addStatus(event.message);
+            addStatus(
+              event.message,
+              event.type === 'retry' ? 'retry' : event.type === 'error' ? 'error' : undefined
+            );
 
             if (event.batchIndex !== undefined && event.batchTotal !== undefined) {
               setBatchInfo({
@@ -293,10 +510,10 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
               });
             }
             if (event.type === 'stopped') {
-              addStatus('⏹️ Toplu test durduruldu.');
+              addStatus('⏹️ Test durduruldu.');
             }
             if (event.type === 'complete') {
-              addStatus('🏁 Toplu test tamamlandı! Sonuçlar Leaderboard\'ta.');
+              addStatus('🏁 Test tamamlandı! Sonuçlar Leaderboard sekmesinde.');
             }
             if (event.type === 'error') {
               setError(event.message);
@@ -311,7 +528,6 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
       setError(message);
       addStatus(`❌ Hata: ${message}`);
     } finally {
-      setIsBatchRunning(false);
       setIsRunning(false);
       onRunningChange?.(false);
       setBatchInfo(null);
@@ -320,118 +536,22 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
     }
   };
 
-  const handleStartTest = async () => {
-    if (!testModelId || !judgeModelId) {
-      setError('Lütfen hem test edilecek modeli hem de Hakem AI modelini seçin.');
-      return;
-    }
-    if (serverLocked) {
-      setError('Şu anda başka bir benchmark testi çalışıyor. Lütfen tamamlanmasını bekleyin.');
-      return;
-    }
+  // ─── Türetilmiş veriler ─────────────────────────────────────
 
-    setIsRunning(true);
-    onRunningChange?.(true);
-    setProgress(0);
-    setStatusMessages([]);
-    setError(null);
-    setCompleted(null);
-    addStatus('Test başlatılıyor...');
-
-    try {
-      const res = await fetch('/api/benchmark/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ testModelId, judgeModelId }),
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => null);
-        if (res.status === 409) {
-          // Sunucuda başka bir benchmark çalışıyor — kilit durumunu yansıt
-          setServerLocked(true);
-          setServerLockedBy(errData?.lockedBy ?? null);
-          throw new Error(
-            errData?.error ??
-              'Şu anda başka bir benchmark testi çalışıyor. Lütfen o test tamamlanana kadar bekleyin.'
-          );
-        }
-        throw new Error(errData?.error ?? `Benchmark başlatılamadı (HTTP ${res.status})`);
-      }
-      if (!res.body) {
-        throw new Error('Sunucu akış (stream) döndürmedi');
-      }
-
-      // NDJSON akışını satır satır oku
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let buffer = '';
-      let finalRun: BenchmarkRun | null = null;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const event: RunProgressEvent = JSON.parse(line);
-            setProgress(event.progress);
-            addStatus(
-              event.message,
-              event.type === 'retry' ? 'retry' : event.type === 'error' ? 'error' : undefined
-            );
-
-            if (event.type === 'complete' && event.run) {
-              finalRun = event.run;
-              setCompleted(event.run);
-            }
-            if (event.type === 'error') {
-              setError(event.message);
-            }
-          } catch {
-            // tekil satır hatası akışı bozmasın
-          }
-        }
-      }
-
-      if (finalRun) {
-        addStatus(`✅ Test başarıyla tamamlandı — Genel Skor: ${finalRun.totalScore}/100`);
-        // 2 saniye bekle, sonra kullanıcıyı Leaderboard'a yönlendir
-        setTimeout(() => onRunComplete(finalRun!), 2000);
-      } else if (!error) {
-        setError('Test akışı beklenmedik şekilde sonlandı.');
-      }
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      setError(message);
-      addStatus(`❌ Hata: ${message}`);
-    } finally {
-      setIsRunning(false);
-      onRunningChange?.(false);
-      // Kendi testimiz bitti; sunucudaki kilit durumunu tazele
-      fetchLockStatus();
-    }
-  };
-
-  // Harici API modelleri (LM Studio olmayan) — birleşik listede gösterilir
-  const apiModels = models.filter((m) => m.provider !== 'lmstudio');
-
-  const testModel = models.find((m) => m.id === testModelId);
   const judgeModel = models.find((m) => m.id === judgeModelId);
+  const judgeIsThinking = judgeModel
+    ? THINKING_MODEL_PATTERN.test(judgeModel.modelId) || THINKING_MODEL_PATTERN.test(judgeModel.name)
+    : false;
+  const lmStudioInCatalog = libraryModels.length > 0;
 
   return (
-    <div className="p-6">
-      <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+    <div className="p-6 space-y-6">
+      <h2 className="text-xl font-bold flex items-center gap-2">
         <Zap className="h-5 w-5 text-sky-400" /> Test Koşucusu (Live Benchmark)
       </h2>
 
       {/* Madde 3: Bu koşuda hangi soruların test edileceği göstergesi */}
-      <div className="mb-4 flex items-center justify-between flex-wrap gap-2 bg-gray-800/60 rounded-lg px-4 py-3 border border-gray-700 max-w-3xl">
+      <div className="flex items-center justify-between flex-wrap gap-2 bg-gray-800/60 rounded-lg px-4 py-3 border border-gray-700">
         <div className="text-sm text-gray-300">
           <ClipboardList className="inline h-4 w-4 mr-1 text-sky-400" />
           Bu koşuda{' '}
@@ -455,151 +575,268 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
         </button>
       </div>
 
-      <div className="bg-gray-800/60 rounded-lg p-6 space-y-5 border border-gray-700 max-w-3xl">
-        {/* ─── Tekilleştirilmiş model seçimi ────────────────────
-            Tek liste: LM Studio kütüphanesi (canlı tarama) +
-            harici API modelleri. Radyo butonuyla tek model seçilir. */}
-        <div>
-          <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
-            <label className="block text-sm font-medium text-gray-300">
-              <Zap className="inline h-4 w-4 mr-1 text-sky-400" />
-              Test Edilecek Model — listeden seçin
-              <span className="ml-2 text-xs text-gray-500 font-normal">
-                ({libraryModels.length} LM Studio + {apiModels.length} API modeli)
-              </span>
-            </label>
-            <button
-              onClick={fetchLibrary}
-              disabled={isRunning}
-              className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-emerald-300 disabled:opacity-50 transition-colors"
-              title="LM Studio kütüphanesini yeniden tara"
-            >
-              <RefreshCw className="h-3.5 w-3.5" /> Listeyi Tara
-            </button>
-          </div>
-          {hiddenBrokenCount > 0 && (
-            <p className="text-xs text-red-400/80 mb-1">
-              {hiddenBrokenCount} çalışmayan model gizlendi.
-            </p>
-          )}
-          {libraryModels.length === 0 && apiModels.length === 0 ? (
-            <p className="text-xs text-gray-500">
-              Model bulunamadı. LM Studio ile model indirin veya Model Yönetimi'nden API modeli ekleyin.
-            </p>
-          ) : (
-            <div className="max-h-56 overflow-y-auto rounded border border-gray-700 divide-y divide-gray-700/50">
-              {/* LM Studio kütüphane modelleri */}
-              {libraryModels.map((lm) => {
-                const selected = testModelId === lm.id;
-                return (
-                  <label
-                    key={lm.libraryKey}
-                    className={`w-full flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors ${
-                      selected
-                        ? 'bg-sky-500/15'
-                        : lm.lastLoadError
-                          ? 'bg-red-500/5 hover:bg-red-500/10'
-                          : 'hover:bg-gray-700/50'
-                    }`}
-                    title={
-                      lm.lastLoadError
-                        ? `⚠️ Çalışmıyor: ${lm.lastLoadError}`
-                        : 'Seçmek için tıklayın'
-                    }
-                  >
-                    <input
-                      type="radio"
-                      name="testModel"
-                      checked={selected}
-                      onChange={() => handleSelectLibraryModel(lm)}
-                      disabled={isRunning}
-                      className="h-4 w-4 accent-sky-500 shrink-0"
-                    />
-                    <span className="flex items-center gap-2 min-w-0 flex-1">
-                      <HardDriveDownload
-                        className={`h-3.5 w-3.5 shrink-0 ${
-                          lm.lastLoadError ? 'text-red-400' : 'text-gray-500'
-                        }`}
-                      />
-                      <span
-                        className={`text-sm truncate ${
-                          lm.lastLoadError
-                            ? 'text-red-300'
-                            : selected
-                              ? 'text-sky-200 font-medium'
-                              : 'text-gray-200'
-                        }`}
-                      >
-                        {lm.name}
-                      </span>
-                    </span>
-                    <span className="flex items-center gap-1.5 shrink-0">
-                      {lm.lastLoadError && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-300">
-                          ⚠️ Çalışmıyor
-                        </span>
-                      )}
-                      <span
-                        className={`text-xs px-2 py-0.5 rounded ${
-                          lm.isLoaded
-                            ? 'bg-emerald-500/20 text-emerald-300'
-                            : 'bg-gray-600/40 text-gray-400'
-                        }`}
-                      >
-                        {lm.isLoaded ? '● Yüklü' : '○ Kütüphanede'}
-                      </span>
-                    </span>
-                  </label>
-                );
-              })}
-              {/* Harici API modelleri */}
-              {apiModels.map((m) => {
-                const selected = testModelId === m.id;
-                return (
-                  <label
-                    key={m.id}
-                    className={`w-full flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors ${
-                      selected ? 'bg-sky-500/15' : 'hover:bg-gray-700/50'
-                    }`}
-                    title="Seçmek için tıklayın"
-                  >
-                    <input
-                      type="radio"
-                      name="testModel"
-                      checked={selected}
-                      onChange={() => setTestModelId(m.id)}
-                      disabled={isRunning}
-                      className="h-4 w-4 accent-sky-500 shrink-0"
-                    />
-                    <span className="flex items-center gap-2 min-w-0 flex-1">
-                      <Cloud className="h-3.5 w-3.5 shrink-0 text-violet-400" />
-                      <span
-                        className={`text-sm truncate ${
-                          selected ? 'text-sky-200 font-medium' : 'text-gray-200'
-                        }`}
-                      >
-                        {m.name}
-                      </span>
-                    </span>
-                    <span className="text-xs px-2 py-0.5 rounded bg-violet-500/20 text-violet-300 shrink-0">
-                      ☁ API
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
-          )}
-          <p className="mt-1 text-xs text-gray-500">
-            LM Studio modeli seçtiğinizde kaydedilir; test başladığında otomatik VRAM'e yüklenir (JIT loading).
-            Liste "Listeyi Tara" ile her zaman güncellenebilir.
-          </p>
+      {/* ═══════════════════════════════════════════════════════
+          BAĞLANTI KATALOĞU — üst bölüm
+          LM Studio + hazır API sağlayıcıları; her modelin yanında
+          + butonu: alttaki "Test Edilecek Modeller" listesine ekler.
+          ═══════════════════════════════════════════════════════ */}
+      <section className="bg-gray-800/60 rounded-lg p-5 border border-gray-700">
+        <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
+          <h3 className="font-semibold text-gray-200 flex items-center gap-2">
+            <Server className="h-4 w-4 text-sky-400" />
+            Bağlantı Kataloğu
+          </h3>
+          <button
+            onClick={fetchLibrary}
+            disabled={isRunning}
+            className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-emerald-300 disabled:opacity-50 transition-colors"
+            title="LM Studio kütüphanesini yeniden tara"
+          >
+            <RefreshCw className="h-3.5 w-3.5" /> Listeyi Tara
+          </button>
         </div>
 
-        {/* Hakem modeli — tek dropdown olarak kalır */}
-        <div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* ─── LM Studio bağlantı kartı ─── */}
+          <div className="rounded-lg border border-emerald-700/50 bg-gray-900/60 overflow-hidden flex flex-col">
+            <div className="px-4 py-3 bg-emerald-900/30 border-b border-emerald-800/50 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="font-medium text-emerald-200 flex items-center gap-2 text-sm">
+                  <HardDriveDownload className="h-4 w-4 shrink-0" /> LM Studio (Yerel)
+                </div>
+                <div className="text-xs text-gray-400 truncate">
+                  <code className="text-emerald-300">http://localhost:1234/v1</code> — Developer → Start Server
+                </div>
+              </div>
+              <span
+                className={`text-xs px-2 py-0.5 rounded shrink-0 ${
+                  lmStudioInCatalog
+                    ? 'bg-emerald-500/20 text-emerald-300'
+                    : 'bg-red-500/20 text-red-300'
+                }`}
+              >
+                {lmStudioInCatalog ? `${libraryModels.length} model` : 'Bağlantı yok'}
+              </span>
+            </div>
+            <div className="max-h-64 overflow-y-auto divide-y divide-gray-800 flex-1">
+              {hiddenBrokenCount > 0 && (
+                <p className="text-xs text-red-400/80 px-3 py-1.5">
+                  {hiddenBrokenCount} çalışmayan model gizlendi.
+                </p>
+              )}
+              {libraryModels.length === 0 ? (
+                <p className="text-xs text-gray-500 px-3 py-3">
+                  LM Studio kütüphanesi okunamadı. LM Studio'nun açık ve sunucusunun
+                  çalıştığından emin olun, ardından "Listeyi Tara"ya basın.
+                </p>
+              ) : (
+                libraryModels.map((lm) => (
+                  <div
+                    key={lm.libraryKey}
+                    className="flex items-center gap-2 px-3 py-2 hover:bg-gray-800/60 transition-colors"
+                  >
+                    <span className="flex items-center gap-2 min-w-0 flex-1">
+                      <HardDriveDownload className="h-3.5 w-3.5 shrink-0 text-gray-500" />
+                      <span className="text-sm truncate text-gray-200">{lm.name}</span>
+                    </span>
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded shrink-0 ${
+                        lm.isLoaded
+                          ? 'bg-emerald-500/20 text-emerald-300'
+                          : 'bg-gray-600/40 text-gray-400'
+                      }`}
+                    >
+                      {lm.isLoaded ? '● Yüklü' : '○ Kütüphanede'}
+                    </span>
+                    <button
+                      onClick={() => handleAddLMStudioModel(lm)}
+                      disabled={isRunning}
+                      title={`"${lm.name}" modelini test listesine ekle`}
+                      className="shrink-0 h-6 w-6 flex items-center justify-center rounded bg-sky-600/80 hover:bg-sky-500 disabled:opacity-40 text-white transition-colors"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+            {libraryModels.length > 1 && (
+              <div className="px-3 py-2 border-t border-gray-800">
+                <button
+                  onClick={handleAddAllLMStudioModels}
+                  disabled={isRunning}
+                  className="text-xs text-sky-300 hover:text-sky-200 disabled:opacity-50 transition-colors"
+                >
+                  + Tümünü Ekle ({libraryModels.length} model)
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* ─── Hazır API sağlayıcı kartları (accordion) ─── */}
+          <div className="space-y-2">
+            {API_PROVIDER_TEMPLATES.map((tpl) => {
+              const expanded = expandedProviders.has(tpl.label);
+              const keyReady = providerKeyReady(tpl);
+              return (
+                <div
+                  key={tpl.label}
+                  className="rounded-lg border border-violet-700/40 bg-gray-900/60 overflow-hidden"
+                >
+                  <button
+                    onClick={() => toggleProviderExpanded(tpl.label)}
+                    className="w-full px-4 py-2.5 flex items-center justify-between gap-2 hover:bg-gray-800/60 transition-colors text-left"
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      {expanded ? (
+                        <ChevronDown className="h-4 w-4 text-gray-500 shrink-0" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-gray-500 shrink-0" />
+                      )}
+                      <Cloud className="h-4 w-4 text-violet-400 shrink-0" />
+                      <span className="font-medium text-violet-200 text-sm">{tpl.label}</span>
+                      <span className="text-xs text-gray-500 truncate hidden sm:inline">
+                        {tpl.hint}
+                      </span>
+                    </span>
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded shrink-0 flex items-center gap-1 ${
+                        keyReady
+                          ? 'bg-emerald-500/20 text-emerald-300'
+                          : 'bg-amber-500/20 text-amber-300'
+                      }`}
+                    >
+                      {keyReady ? '✓ Anahtar hazır' : <><KeyRound className="h-3 w-3" /> Anahtar gerekli</>}
+                    </span>
+                  </button>
+
+                  {expanded && (
+                    <div className="border-t border-gray-800">
+                      <div className="divide-y divide-gray-800">
+                        {tpl.models.map((model) => (
+                          <div
+                            key={model.modelId}
+                            className="flex items-center gap-2 px-4 py-2 hover:bg-gray-800/60 transition-colors"
+                          >
+                            <span className="flex items-center gap-2 min-w-0 flex-1">
+                              <span className="text-sm truncate text-gray-200">{model.name}</span>
+                              <code className="text-xs text-gray-500 truncate hidden md:inline">
+                                {model.modelId}
+                              </code>
+                            </span>
+                            <button
+                              onClick={() => handleAddApiModel(tpl, model)}
+                              disabled={isRunning}
+                              title={`"${model.name}" modelini test listesine ekle`}
+                              className="shrink-0 h-6 w-6 flex items-center justify-center rounded bg-sky-600/80 hover:bg-sky-500 disabled:opacity-40 text-white transition-colors"
+                            >
+                              <Plus className="h-4 w-4" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      {/* Anahtar inputu — anahtar yoksa otomatik açılır */}
+                      {!keyReady && (
+                        <div className="px-4 py-3 border-t border-gray-800 bg-amber-500/5">
+                          <label className="block text-xs text-amber-300 mb-1.5 flex items-center gap-1.5">
+                            <KeyRound className="h-3.5 w-3.5" />
+                            {tpl.label} API anahtarı ({tpl.hint})
+                          </label>
+                          <div className="flex gap-2">
+                            <input
+                              type="password"
+                              value={providerApiKeys[tpl.label] ?? ''}
+                              onChange={(e) =>
+                                setProviderApiKeys((prev) => ({
+                                  ...prev,
+                                  [tpl.label]: e.target.value,
+                                }))
+                              }
+                              placeholder="sk-..."
+                              className="flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded text-sm text-white placeholder-gray-500"
+                            />
+                            <button
+                              onClick={() => handleSaveProviderKey(tpl)}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm rounded transition-colors"
+                            >
+                              Kaydet
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      {/* ═══════════════════════════════════════════════════════
+          TEST EDİLECEK MODELLER — alt bölüm
+          Katalogdan + ile eklenir, − ile çıkarılır.
+          "Testi Başlat" YALNIZCA bu listedeki modelleri çalıştırır.
+          ═══════════════════════════════════════════════════════ */}
+      <section className="bg-gray-800/60 rounded-lg p-5 border border-gray-700">
+        <h3 className="font-semibold text-gray-200 flex items-center gap-2 mb-3">
+          <Zap className="h-4 w-4 text-sky-400" />
+          Test Edilecek Modeller
+          <span className="text-xs font-normal text-gray-500">
+            ({selectedTestModels.length} model — "Testi Başlat" yalnızca bu listeyi çalıştırır)
+          </span>
+        </h3>
+
+        {selectedTestModels.length === 0 ? (
+          <p className="text-sm text-gray-500 py-4 text-center border border-dashed border-gray-700 rounded">
+            Henüz model eklenmedi. Yukarıdaki <b className="text-gray-400">Bağlantı Kataloğu</b>'ndan
+            bir modelin yanındaki <span className="inline-flex items-center justify-center h-5 w-5 rounded bg-sky-600 text-white align-middle mx-0.5"><Plus className="h-3.5 w-3.5" /></span> tuşuna basın.
+          </p>
+        ) : (
+          <div className="rounded border border-gray-700 divide-y divide-gray-700/50 max-h-56 overflow-y-auto">
+            {selectedTestModels.map((item) => (
+              <div
+                key={item.id}
+                className="flex items-center gap-2 px-3 py-2 bg-sky-500/5 hover:bg-gray-700/40 transition-colors"
+              >
+                <span className="flex items-center gap-2 min-w-0 flex-1">
+                  {item.provider === 'lmstudio' ? (
+                    <HardDriveDownload className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                  ) : (
+                    <Cloud className="h-3.5 w-3.5 shrink-0 text-violet-400" />
+                  )}
+                  <span className="text-sm truncate text-sky-100">{item.name}</span>
+                </span>
+                <span
+                  className={`text-xs px-2 py-0.5 rounded shrink-0 ${
+                    item.provider === 'lmstudio'
+                      ? 'bg-emerald-500/20 text-emerald-300'
+                      : 'bg-violet-500/20 text-violet-300'
+                  }`}
+                >
+                  {item.provider === 'lmstudio' ? 'LM Studio' : '☁ API'}
+                </span>
+                <button
+                  onClick={() => handleRemoveFromTestList(item)}
+                  disabled={isRunning}
+                  title={`"${item.name}" modelini listeden çıkar`}
+                  className="shrink-0 h-6 w-6 flex items-center justify-center rounded bg-red-600/70 hover:bg-red-500 disabled:opacity-40 text-white transition-colors"
+                >
+                  <Minus className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Hakem modeli seçimi */}
+        <div className="mt-4">
           <label className="block text-sm font-medium text-gray-300 mb-2">
             <Scale className="inline h-4 w-4 mr-1 text-violet-400" />
             Hakem AI Modeli (Judge)
+            <span className="ml-2 text-xs text-gray-500 font-normal">
+              — test modellerinden bağımsız; yalnızca puanlama sorguları alır
+            </span>
           </label>
           <select
             value={judgeModelId}
@@ -615,32 +852,44 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
               </option>
             ))}
           </select>
+          {judgeModel && (
+            <div className="mt-2 space-y-1.5">
+              <div className="flex items-start gap-2 text-xs text-gray-400 bg-gray-900/60 rounded px-3 py-2 border border-gray-700">
+                <Scale className="h-3.5 w-3.5 shrink-0 mt-0.5 text-violet-400" />
+                <span>
+                  Hakem: <b className="text-gray-200">{judgeModel.name}</b>{' '}
+                  (<code className="text-gray-500">{judgeModel.modelId}</code>). Test
+                  sorgularınız yalnızca yukarıdaki listedeki modellere gider; hakem modeli
+                  yalnızca cevapları puanlamak için ayrı sorgular alır.
+                </span>
+              </div>
+              {judgeIsThinking && (
+                <div className="flex items-start gap-2 text-xs text-amber-300 bg-amber-500/10 rounded px-3 py-2 border border-amber-500/40">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                  <span>
+                    Hakem olarak bir <b>düşünme (thinking) modeli</b> seçili: bu model her
+                    puanlamada önce uzun düşünme üretir, puanlama belirgin şekilde yavaşlar.
+                    Hızlı bir model (örn. küçük bir sohbet modeli) hakem olarak önerilir.
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Seçilen modellerin özeti */}
-        {(testModel || judgeModel) && (
-          <div className="text-xs text-gray-500 space-y-1">
-            {testModel && (
-              <p>
-                Test modeli: <span className="text-gray-300">{testModel.modelId}</span> @ {testModel.baseUrl}
-              </p>
-            )}
-            {judgeModel && (
-              <p>
-                Hakem modeli: <span className="text-gray-300">{judgeModel.modelId}</span> @ {judgeModel.baseUrl}
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* Başlat + Toplu Test + Durdur + Senkronize düğmeleri */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {/* Başlat + Durdur + Senkronize düğmeleri */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
           <button
             onClick={handleStartTest}
-            disabled={isRunning || serverLocked || !testModelId || !judgeModelId}
+            disabled={isRunning || serverLocked || selectedTestModels.length === 0 || !judgeModelId}
+            title={
+              selectedTestModels.length === 0
+                ? 'Önce katalogdan + ile model ekleyin'
+                : `Yalnızca listedeki ${selectedTestModels.length} model test edilecek`
+            }
             className="flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded transition-colors"
           >
-            {isRunning && !isBatchRunning ? (
+            {isRunning ? (
               <>
                 <Loader2 className="h-5 w-5 animate-spin" /> Test Çalışıyor...
               </>
@@ -650,46 +899,16 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
               </>
             ) : (
               <>
-                <Play className="h-5 w-5" /> Testi Başlat
+                <Play className="h-5 w-5" /> Testi Başlat ({selectedTestModels.length} model)
               </>
             )}
           </button>
 
-          <button
-            onClick={handleStartBatchTest}
-            disabled={isRunning || serverLocked || !judgeModelId}
-            title="LM Studio kütüphanesindeki tüm modelleri sırayla yükle → test et → boşalt (eject)"
-            className="flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded transition-colors"
-          >
-            {isBatchRunning ? (
-              <>
-                <Loader2 className="h-5 w-5 animate-spin" /> Toplu Test Çalışıyor...
-              </>
-            ) : (
-              <>
-                <Layers className="h-5 w-5" /> Tüm Modelleri Test Et
-              </>
-            )}
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {/* Durdur — yalnızca bir test çalışırken aktif */}
-          {(isRunning || isBatchRunning || serverLocked) && (
-            <button
-              onClick={handleStopTest}
-              className="flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 px-4 rounded transition-colors"
-            >
-              <Square className="h-4 w-4" /> Testi Durdur
-            </button>
-          )}
-
-          {/* Model listesini LM Studio ile senkronize et */}
           <button
             onClick={handleSyncModels}
             disabled={syncing || isRunning}
             title="Duplicate kayıtları siler, isimleri LM Studio kimlikleriyle düzeltir, kütüphanede olmayan modelleri temizler"
-            className="flex items-center justify-center gap-2 bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-white font-medium py-2.5 px-4 rounded transition-colors text-sm"
+            className="flex items-center justify-center gap-2 bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-white font-medium py-3 px-4 rounded transition-colors text-sm"
           >
             {syncing ? (
               <>
@@ -703,13 +922,22 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
           </button>
         </div>
 
+        {(isRunning || serverLocked) && (
+          <div className="mt-3">
+            <button
+              onClick={handleStopTest}
+              className="w-full flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 px-4 rounded transition-colors"
+            >
+              <Square className="h-4 w-4" /> Testi Durdur
+            </button>
+          </div>
+        )}
+
         {/* Toplu test ilerleme göstergesi */}
-        {isBatchRunning && batchInfo && (
-          <div className="p-3 bg-violet-500/10 border border-violet-500/40 rounded">
-            <div className="flex items-center justify-between text-sm text-violet-300 mb-1">
-              <span className="font-medium flex items-center gap-2">
-                <Layers className="h-4 w-4" /> Toplu Test
-              </span>
+        {isRunning && batchInfo && (
+          <div className="mt-4 p-3 bg-sky-500/10 border border-sky-500/40 rounded">
+            <div className="flex items-center justify-between text-sm text-sky-300 mb-1">
+              <span className="font-medium">Test Sırası</span>
               <span>
                 Model {batchInfo.index}/{batchInfo.total}
                 {batchInfo.modelName ? ` — ${batchInfo.modelName}` : ''}
@@ -717,7 +945,7 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
             </div>
             <div className="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
               <div
-                className="h-2 rounded-full bg-violet-500 transition-all duration-500"
+                className="h-2 rounded-full bg-sky-500 transition-all duration-500"
                 style={{ width: `${(batchInfo.index / batchInfo.total) * 100}%` }}
               />
             </div>
@@ -726,7 +954,7 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
 
         {/* İlerleme çubuğu */}
         {(isRunning || progress > 0) && (
-          <div>
+          <div className="mt-4">
             <div className="flex justify-between text-xs text-gray-400 mb-1">
               <span>İlerleme</span>
               <span>{progress}%</span>
@@ -744,7 +972,7 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
 
         {/* Sunucuda başka bir test çalışıyor uyarısı */}
         {serverLocked && !isRunning && (
-          <div className="flex items-start gap-2 p-3 bg-amber-500/10 border border-amber-500/40 rounded text-sm text-amber-300">
+          <div className="mt-4 flex items-start gap-2 p-3 bg-amber-500/10 border border-amber-500/40 rounded text-sm text-amber-300">
             <Loader2 className="h-5 w-5 shrink-0 mt-0.5 animate-spin" />
             <span>
               Şu anda sunucuda başka bir benchmark testi çalışıyor
@@ -756,7 +984,7 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
 
         {/* Hata mesajı */}
         {error && (
-          <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/40 rounded text-sm text-red-300">
+          <div className="mt-4 flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/40 rounded text-sm text-red-300">
             <XCircle className="h-5 w-5 shrink-0 mt-0.5" />
             <span>{error}</span>
           </div>
@@ -764,17 +992,18 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
 
         {/* Tamamlandı bilgisi */}
         {completed && !isRunning && (
-          <div className="flex items-start gap-2 p-3 bg-emerald-500/10 border border-emerald-500/40 rounded text-sm text-emerald-300">
+          <div className="mt-4 flex items-start gap-2 p-3 bg-emerald-500/10 border border-emerald-500/40 rounded text-sm text-emerald-300">
             <CheckCircle2 className="h-5 w-5 shrink-0 mt-0.5" />
             <span>
-              Test tamamlandı! Genel Skor: <b>{completed.totalScore}/100</b> — Leaderboard'a yönlendiriliyorsunuz...
+              Test tamamlandı! Genel Skor: <b>{completed.totalScore}/100</b> — Sonuçlar
+              Leaderboard sekmesinde.
             </span>
           </div>
         )}
 
         {/* Canlı durum mesajları */}
         {statusMessages.length > 0 && (
-          <div>
+          <div className="mt-4">
             <div className="text-xs text-gray-500 mb-1">Canlı Durum:</div>
             <div
               ref={statusLogRef}
@@ -797,38 +1026,184 @@ export default function TestRunnerTab({ onRunComplete, onRunningChange }: TestRu
             </div>
           </div>
         )}
+      </section>
 
-        {/* 4 Sütunlu dinamik değerlendirme motoru açıklaması */}
-        <div className="text-xs text-gray-500 border-t border-gray-700 pt-3 space-y-2">
-          <p className="font-medium text-gray-400">4 Sütunlu Dinamik Değerlendirme Motoru (13 soru):</p>
-          <p>
-            <b className="text-sky-300">1. Dinamik Şablonlama:</b> Sorular her koşuda rastgele
-            isim/sayılarla yeniden üretilir — ezber (data contamination) kırılır, gerçek cebirsel
-            çözüm ölçülür.
-          </p>
-          <p>
-            <b className="text-emerald-300">2. Canlı Kod Çalıştırma:</b> Kod cevapları izole
-            sandbox'ta gizli unit testlerden geçer: doğruluk + 100.000 elemanlı dizide O(n)
-            performans testi + derin recursion stresi.
-          </p>
-          <p>
-            <b className="text-amber-300">3. Needle in a Haystack:</b> 2k ve 8k token anlamsız metin
-            yığınlarının içine rastgele gizli şifre saklanır; uzun context'te dikkat kaybı ölçülür.
-          </p>
-          <p>
-            <b className="text-violet-300">4. Baskı Testi (Sycophancy):</b> Model doğru cevap
-            verdikten sonra yanlış değerle baskı yapılır: cevabını savunursa 100, boyun eğerse 50 puan.
-          </p>
-          <p className="text-gray-400">
-            📊 <b>Metrik paneli:</b> Doğruluk Skoru (0-100) · TTFT/TPS (hız) · Biçim Disiplini
-            (istenen formatı ilk denemede tutturma oranı — retry maliyetini ölçer).
-          </p>
-          <p className="text-gray-500">
-            VRAM dostu akış korunur: Warm-up ping → Faz 1: tüm sorular + baskı turu (model sıcak
-            kalır) → Faz 2: Deterministik + Sandbox + Hakem AI puanlaması.
-          </p>
-        </div>
+      {/* 4 Sütunlu dinamik değerlendirme motoru açıklaması */}
+      <div className="text-xs text-gray-500 border-t border-gray-700 pt-3 space-y-2">
+        <p className="font-medium text-gray-400">4 Sütunlu Dinamik Değerlendirme Motoru (13 soru):</p>
+        <p>
+          <b className="text-sky-300">1. Dinamik Şablonlama:</b> Sorular her koşuda rastgele
+          isim/sayılarla yeniden üretilir — ezber (data contamination) kırılır, gerçek cebirsel
+          çözüm ölçülür.
+        </p>
+        <p>
+          <b className="text-emerald-300">2. Canlı Kod Çalıştırma:</b> Kod cevapları izole
+          sandbox'ta gizli unit testlerden geçer: doğruluk + 100.000 elemanlı dizide O(n)
+          performans testi + derin recursion stresi.
+        </p>
+        <p>
+          <b className="text-amber-300">3. Needle in a Haystack:</b> 2k ve 8k token anlamsız metin
+          yığınlarının içine rastgele gizli şifre saklanır; uzun context'te dikkat kaybı ölçülür.
+        </p>
+        <p>
+          <b className="text-violet-300">4. Baskı Testi (Sycophancy):</b> Model doğru cevap
+          verdikten sonra yanlış değerle baskı yapılır: cevabını savunursa 100, boyun eğerse 50 puan.
+        </p>
+        <p className="text-gray-400">
+          📊 <b>Metrik paneli:</b> Doğruluk Skoru (0-100) · TTFT/TPS (hız) · Biçim Disiplini
+          (istenen formatı ilk denemede tutturma oranı — retry maliyetini ölçer).
+        </p>
+        <p className="text-gray-500">
+          VRAM dostu akış korunur: Warm-up ping → Faz 1: tüm sorular + baskı turu (model sıcak
+          kalır) → Faz 2: Deterministik + Sandbox + Hakem AI puanlaması. LM Studio modelleri
+          test başlamadan otomatik VRAM'e yüklenir (JIT loading) — ilk istek yavaş görünebilir.
+        </p>
       </div>
+
+      {/* ═══════════════════════════════════════════════════════
+          KATEGORİ SEÇİM MODALI — "Testi Başlat" sonrası açılır
+          Genel / Kodlama / Türkçe / Hepsi
+          ═══════════════════════════════════════════════════════ */}
+      {showCategoryModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => setShowCategoryModal(false)}
+        >
+          <div
+            className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal başlık */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+              <h3 className="font-semibold text-gray-100 flex items-center gap-2">
+                <Menu className="h-5 w-5 text-sky-400" />
+                Test Kategorisi Seç
+              </h3>
+              <button
+                onClick={() => setShowCategoryModal(false)}
+                className="text-gray-500 hover:text-gray-300 transition-colors"
+                title="Kapat"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal içerik */}
+            <div className="p-5 space-y-3">
+              <p className="text-sm text-gray-400">
+                Bu koşuda hangi test setinin çalışacağını seçin. Seçim yalnızca bu koşuyu
+                etkiler; soru havuzu seçimleriniz (Soru Havuzu sekmesi) aynen geçerli kalır.
+              </p>
+
+              {/* Genel */}
+              <button
+                onClick={() => {
+                  setSelectedCategory('general');
+                  startBenchmark('general');
+                }}
+                className="w-full text-left p-4 rounded-lg border border-gray-700 bg-gray-800/60 hover:border-sky-500/60 hover:bg-sky-500/10 transition-colors group"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <ClipboardList className="h-5 w-5 text-sky-400 shrink-0" />
+                    <div className="min-w-0">
+                      <div className="font-medium text-gray-100 group-hover:text-sky-200">
+                        Genel
+                      </div>
+                      <div className="text-xs text-gray-400">
+                        Mevcut testler — Kodlama ve Türkçe HARİÇ (mantık, matematik, IFEval,
+                        JSON, kod, needle, baskı direnci, Türkçe başarım)
+                      </div>
+                    </div>
+                  </div>
+                  <Check className="h-4 w-4 text-sky-400 opacity-0 group-hover:opacity-100 shrink-0" />
+                </div>
+              </button>
+
+              {/* Kodlama */}
+              <button
+                onClick={() => {
+                  setSelectedCategory('coding');
+                  startBenchmark('coding');
+                }}
+                className="w-full text-left p-4 rounded-lg border border-gray-700 bg-gray-800/60 hover:border-emerald-500/60 hover:bg-emerald-500/10 transition-colors group"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Server className="h-5 w-5 text-emerald-400 shrink-0" />
+                    <div className="min-w-0">
+                      <div className="font-medium text-gray-100 group-hover:text-emerald-200">
+                        Kodlama
+                      </div>
+                      <div className="text-xs text-gray-400">
+                        5 seviyeli kodlama benchmark seti (Python 3.11+): Rate Limiter, Async
+                        Task Queue, LRU Cache, Kod Analizi, Saga Pattern
+                      </div>
+                    </div>
+                  </div>
+                  <Check className="h-4 w-4 text-emerald-400 opacity-0 group-hover:opacity-100 shrink-0" />
+                </div>
+              </button>
+
+              {/* Türkçe */}
+              <button
+                onClick={() => {
+                  setSelectedCategory('turkish');
+                  startBenchmark('turkish');
+                }}
+                className="w-full text-left p-4 rounded-lg border border-gray-700 bg-gray-800/60 hover:border-violet-500/60 hover:bg-violet-500/10 transition-colors group"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Radio className="h-5 w-5 text-violet-400 shrink-0" />
+                    <div className="min-w-0">
+                      <div className="font-medium text-gray-100 group-hover:text-violet-200">
+                        Türkçe
+                      </div>
+                      <div className="text-xs text-gray-400">
+                        10 soruluk genel Türkçe yetkinlik seti (ekim, deyim, özet, dilbilgisi,
+                        anlam, yazım, cümle, sözcük, paragraf, edebi)
+                      </div>
+                    </div>
+                  </div>
+                  <Check className="h-4 w-4 text-violet-400 opacity-0 group-hover:opacity-100 shrink-0" />
+                </div>
+              </button>
+
+              {/* Hepsi */}
+              <button
+                onClick={() => {
+                  setSelectedCategory('all');
+                  startBenchmark('all');
+                }}
+                className="w-full text-left p-4 rounded-lg border border-gray-700 bg-gray-800/60 hover:border-amber-500/60 hover:bg-amber-500/10 transition-colors group"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Zap className="h-5 w-5 text-amber-400 shrink-0" />
+                    <div className="min-w-0">
+                      <div className="font-medium text-gray-100 group-hover:text-amber-200">
+                        Hepsi
+                      </div>
+                      <div className="text-xs text-gray-400">
+                        Tüm kategoriler: Genel + Kodlama + Türkçe (en kapsamlı koşu, en uzun
+                        süre)
+                      </div>
+                    </div>
+                  </div>
+                  <Check className="h-4 w-4 text-amber-400 opacity-0 group-hover:opacity-100 shrink-0" />
+                </div>
+              </button>
+            </div>
+
+            {/* Modal alt bilgi */}
+            <div className="px-5 py-3 border-t border-gray-800 text-xs text-gray-500">
+              Seçilen kategori, test motoruna <code className="text-gray-400">selectedCategories</code>{' '}
+              parametresiyle iletilir; yalnızca o kategorinin soruları üretilir ve puanlanır.
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

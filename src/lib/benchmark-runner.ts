@@ -16,6 +16,7 @@ import {
   BenchmarkRun,
   BenchmarkQuestion,
   RunProgressEvent,
+  TestCategory,
 } from '@/types/benchmark';
 import {
   evaluateDeterministic,
@@ -31,6 +32,7 @@ import {
 import { evaluateCodeInSandbox } from '@/lib/code-sandbox';
 import {
   generateRunQuestions,
+  generateRunQuestionsByCategory,
   generatePressureMessage,
 } from '@/lib/question-generators';
 import { addRun, readCustomQuestions, readQuestionSelection } from '@/lib/db';
@@ -53,15 +55,17 @@ export interface RunOutcome {
  * @param testModel  Test edilecek model yapılandırması
  * @param judgeModel Hakem AI modeli
  * @param emit       İlerleme olaylarını yazan fonksiyon (NDJSON satırı üretir)
+ * @param selectedCategories Seçilen test kategorileri (varsayılan: ['all'])
  */
 export async function executeBenchmarkRun(
   testModel: ModelConfig,
   judgeModel: ModelConfig,
-  emit: ProgressEmitter
+  emit: ProgressEmitter,
+  selectedCategories: TestCategory[] = ['all']
 ): Promise<RunOutcome> {
   // ─── SÜTUN 1: Bu koşuya özel dinamik soruları üret ──
-  // Her koşuda isimler, sayılar ve beklenen cevaplar rastgele üretilir.
-  const dynamicQuestions = generateRunQuestions(true);
+  // Seçilen kategorilere göre soru havuzunu birleştir
+  const dynamicQuestions = generateRunQuestionsByCategory(selectedCategories, true);
 
   // ─── Madde 3: Soru havuzu seçimi ────────────────────────
   // Kullanıcı soru havuzunda işaretlediği standart sorularla
@@ -141,10 +145,12 @@ export async function executeBenchmarkRun(
     });
 
     // Thinking modeller (Qwen3.5 vb.) düşünme süreciyle token tüketir;
-    // needle/adversarial'da cevaba ulaşamadan kesilmesin diye cömert limit.
+    // needle/adversarial/coding'da cevaba ulaşamadan kesilmesin diye cömert limit.
     const maxTokens =
       question.category === 'needle' ? 1024 :
-      question.category === 'adversarial' ? 2048 : 4096;
+      question.category === 'adversarial' ? 2048 :
+      question.category === 'coding' ? 8192 :  // Kodlama benchmark: uzun kod + açıklama
+      question.category === 'turkish_general' ? 2048 : 4096;
 
     // Cevap üretimi: ağ hatası / geçici kesinti olursa en fazla 3 kez dene.
     // Her başarısız denemede 'retry' olayı emit edilir; 3 deneme de
@@ -268,7 +274,7 @@ export async function executeBenchmarkRun(
 
     // ─── SÜTUN 2: Sandbox değerlendirmesi (kod soruları) ──
     let sandboxTests: QuestionResult['sandboxTests'] | undefined;
-    if (question.category === 'code' && question.evaluationParams?.functionName) {
+    if ((question.category === 'code' || question.category === 'coding') && question.evaluationParams?.functionName) {
       const fnName = String(question.evaluationParams.functionName);
       emit({
         type: 'phase',
@@ -329,7 +335,8 @@ export async function executeBenchmarkRun(
               judgeModel,
               question.question,
               raw.finalAnswer,
-              question.expectedAnswer ?? undefined
+              question.expectedAnswer ?? undefined,
+              question.category
             );
             if (result === null) {
               throw new Error(
@@ -447,6 +454,7 @@ export async function executeBenchmarkRun(
     formatDiscipline,
     results,
     timestamp: Date.now(),
+    selectedCategories,
   };
 
   // "En son test geçerli" politikası: aynı modelin eski koşuları

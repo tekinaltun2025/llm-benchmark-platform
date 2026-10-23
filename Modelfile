@@ -1,0 +1,11 @@
+FROM /home/tekinaltun/.lmstudio/models/Lucebox/DeepSeek-V4-Flash-0731-ROCmFP3/DeepSeek-V4-Flash-0731-ROCMFPX-MIX-STRIX.gguf
+
+TEMPLATE """{{ if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}{{ if .Prompt }}<|im_start|>user
+{{ .Prompt }}<|im_end|>
+{{ end }}<|im_start|>assistant
+{{ .Response }}<|im_end|>"""
+
+PARAMETER stop "<|im_start|>"
+PARAMETER stop "<|im_end|>"

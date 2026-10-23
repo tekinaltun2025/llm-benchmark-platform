@@ -18,12 +18,30 @@ export const CATEGORY_LABELS: Record<QuestionCategory, string> = {
   needle: "Dikkat Testi (Needle in a Haystack)",
   adversarial: "Baskı Direnci (Sycophancy)",
   turkish: "Türkçe Başarım (Ekim, Deyim, Özet)",
+  coding: "Kodlama Benchmark (5 Seviye)",
+  turkish_general: "Türkçe Genel Yetkinlik (10 Soru)",
 };
+
+import { createCodingBenchmarkQuestions } from "./coding-benchmark";
+import { generateTurkishQuestions } from "./turkish-benchmark";
+import { generateRunQuestions } from "./question-generators";
+
+/**
+ * 3 ayrı soru havuzu — kategori bazlı seçim için
+ */
+export const GENERAL_QUESTIONS: BenchmarkQuestion[] = generateRunQuestions(true);
+
+export const CODING_QUESTIONS: BenchmarkQuestion[] = createCodingBenchmarkQuestions();
+
+export const TURKISH_QUESTIONS: BenchmarkQuestion[] = generateTurkishQuestions();
 
 /**
  * Temsili soru ŞABLONLARI — arayüzde gösterim içindir.
  * Gerçek benchmark koşusunda her soru `question-generators.ts`
  * tarafından rastgele parametrelerle yeniden üretilir (ezberi kırmak için).
+ *
+ * NOT: Bu dizi geriye dönük uyumluluk için tutuluyor; yeni kod
+ * GENERAL_QUESTIONS / CODING_QUESTIONS / TURKISH_QUESTIONS kullanmalı.
  */
 export const benchmarkQuestions: BenchmarkQuestion[] = [
   {
@@ -433,6 +451,12 @@ export function evaluateFormatCompliance(
       const hasExampleUsage = /console\.(log|info|warn)/.test(trimmed);
       return hasFunction && !hasExampleUsage;
     }
+    case "coding": {
+      // Kodlama benchmark: fonksiyon tanımı olmalı, örnek kullanım olmamalı
+      const hasFunction = /function\s+\w+|const\s+\w+\s*=|=>/.test(trimmed);
+      const hasExampleUsage = /console\.(log|info|warn)/.test(trimmed);
+      return hasFunction && !hasExampleUsage;
+    }
     case "adversarial": {
       // İki turda da CEVAP etiketi kullanılmalı
       return /CEVAP\s*:?\s*-?\d/i.test(trimmed);
@@ -448,6 +472,23 @@ export function evaluateFormatCompliance(
         /DÜZELTME\s*:/i.test(trimmed) ||
         /ANLAM\s*:/i.test(trimmed) ||
         /^ÖZET\s*:/i.test(trimmed)
+      );
+    }
+    case "turkish_general": {
+      // Türkçe genel yetkinlik: 10 soru, her biri kendi etiketiyle
+      // ID'ler 200-209 arası, alt kategoriye göre etiket değişir
+      // Basit kontrol: bilinen etiketlerden biri var mı?
+      return (
+        /DÜZELTME\s*:/i.test(trimmed) ||
+        /ANLAM\s*:/i.test(trimmed) ||
+        /^ÖZET\s*:/i.test(trimmed) ||
+        /DEYİM\s*:/i.test(trimmed) ||
+        /BAŞLIK\s*:/i.test(trimmed) ||
+        /HATA\s*:/i.test(trimmed) ||
+        /FARK\s*:/i.test(trimmed) ||
+        /HATALAR\s*:/i.test(trimmed) ||
+        /CÜMLE\s*:/i.test(trimmed) ||
+        /TÜRETLER\s*:/i.test(trimmed)
       );
     }
     default:
@@ -562,6 +603,24 @@ export function evaluateDeterministic(
     case "turkish": {
       return evaluateTurkish(question, answer);
     }
+    
+    case "coding": {
+      // Kodlama benchmark soruları sandbox'ta değerlendirilir
+      // Burada fonksiyon tanımı var mı kontrolü
+      const params = (question.evaluationParams ?? {}) as Record<string, unknown>;
+      const fnName = params.functionName as string | undefined;
+      if (!fnName) return 0;
+      const lower = answer.toLowerCase();
+      const hasFunction =
+        lower.includes(`function ${fnName.toLowerCase()}`) ||
+        lower.includes(`const ${fnName.toLowerCase()}`);
+      return hasFunction ? 20 : 0;
+    }
+    
+    case "turkish_general": {
+      // Türkçe genel yetkinlik - mevcut evaluateTurkish fonksiyonunu kullan
+      return evaluateTurkish(question, answer);
+    }
 
     default:
       return 0;
@@ -642,6 +701,8 @@ function evaluateTurkish(
  *   hibrit ortalamaya katılır.
  * - Türkçe soruları: hibrit — deterministik kurallar + hakem dil kalitesi
  *   ortalaması (akıcılık, dil bilgisi zenginliği ölçülür).
+ * - Kodlama benchmark (coding): sandbox birincil + YENİ 4 kriterlik judge rubriği
+ * - Türkçe genel (turkish_general): hibrit — deterministik + hakem dil kalitesi
  * - Matematik, JSON, IFEval, needle: deterministik kesin; hakem gerekmez.
  * - Adversarial: 2 turlu deterministik; hakem gerekmez.
  */
@@ -649,6 +710,8 @@ export function requiresJudgeEvaluation(question: BenchmarkQuestion): boolean {
   return (
     question.category === "logic" ||
     question.category === "code" ||
-    question.category === "turkish"
+    question.category === "turkish" ||
+    question.category === "coding" ||
+    question.category === "turkish_general"
   );
 }

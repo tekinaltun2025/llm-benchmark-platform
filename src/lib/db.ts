@@ -8,13 +8,21 @@ const DB_PATH = path.join(process.cwd(), "data", "benchmark_db.json");
 interface DBSchema {
   models: ModelConfig[];
   runs: BenchmarkRun[];
+  /** Arşivlenmiş koşular (geri dönüşüm kutusu). Koşular asla fiziksel
+   *  silinmez; DELETE /api/runs buraya taşır, restore buradan geri getirir. */
+  archivedRuns?: BenchmarkRun[];
   customQuestions: BenchmarkQuestion[];
   /** Madde 3: soru havuzundan seçilen standart soru ID'leri.
    *  Tanımsız = hiç ayarlanmamış → tüm sorular seçili kabul edilir. */
   questionSelection?: { enabledQuestionIds: number[] };
 }
 
-const EMPTY_DB: DBSchema = { models: [], runs: [], customQuestions: [] };
+const EMPTY_DB: DBSchema = {
+  models: [],
+  runs: [],
+  archivedRuns: [],
+  customQuestions: [],
+};
 
 /**
  * data dizininin ve benchmark_db.json dosyasının varlığini sağlar.
@@ -45,6 +53,8 @@ export async function readDB(): Promise<DBSchema> {
     return {
       models: Array.isArray(parsed.models) ? parsed.models : [],
       runs: Array.isArray(parsed.runs) ? parsed.runs : [],
+      // Eski dosyalarda archivedRuns yoktur — boş diziyle tamamla (migration)
+      archivedRuns: Array.isArray(parsed.archivedRuns) ? parsed.archivedRuns : [],
       customQuestions: Array.isArray(parsed.customQuestions)
         ? parsed.customQuestions
         : [],
@@ -111,12 +121,17 @@ export async function writeModel(model: ModelConfig): Promise<ModelConfig> {
   );
   if (duplicateIndex >= 0) {
     // Mevcut kaydın kimliğini koru (koşular bu ID'ye bağlı);
-    // yalnızca ad ve hakem bayrağı tazelenir.
+    // yalnızca ad ve hakem bayrağı tazelenir. apiKey ve hata notu
+    // yalnızca gelen modelde doluysa güncellenir — aksi halde
+    // katalogdan tekrar ekleme mevcut anahtarı/hata notunu EZER.
     const existing = db.models[duplicateIndex];
     const updated: ModelConfig = {
       ...model,
       id: existing.id,
       isJudge: existing.isJudge || model.isJudge,
+      apiKey: model.apiKey ?? existing.apiKey,
+      lastLoadError: model.lastLoadError ?? existing.lastLoadError,
+      lastLoadErrorAt: model.lastLoadErrorAt ?? existing.lastLoadErrorAt,
     };
     db.models[duplicateIndex] = updated;
     await writeDB(db);
@@ -198,16 +213,22 @@ export async function setJudgeModel(id: string): Promise<ModelConfig | null> {
  * kaydedildiğinde, o modelin önceki tüm koşuları silinir. Kimlik eşleştirmesi
  * DB kayıt ID'sine değil, gerçek model kimliğine (provider + modelId)
  * göre yapılır — böylece aynı model farklı kayıt yollarından (kütüphane
- * seçimi, toplu test, manuel ekleme) test edilse bile eski koşuları
- * temizlenir ve leaderboard'da asla ikinci bir satır oluşmaz.
+ * seçimi, toplu test, manuel ekleme) test edilse bile koşuları tek bir
+ * kimlik altında toplanır ve leaderboard'da asla ikinci satır oluşmaz.
+ *
+ * KALICILIK: Koşular APPEND-ONLY'dir — yeni koşu, aynı modelin eski
+ * koşularını SİLMEZ. Leaderboard API'si model başına en güncel koşuyu
+ * seçerek tek satır gösterir; geçmiş koşular arşiv değeri olarak kalır.
  */
 export async function addRun(run: BenchmarkRun): Promise<void> {
   const db = await readDB();
-  const identity = (r: BenchmarkRun) =>
-    `${r.modelConfig.provider}:${r.modelConfig.modelId.toLowerCase()}`;
-  const newIdentity = identity(run);
-  db.runs = db.runs.filter((r) => identity(r) !== newIdentity);
-  db.runs.push(run);
+  // Aynı run.id zaten varsa (idempotent tekrar) üzerine yaz; yoksa ekle.
+  const existingIndex = db.runs.findIndex((r) => r.id === run.id);
+  if (existingIndex >= 0) {
+    db.runs[existingIndex] = run;
+  } else {
+    db.runs.push(run);
+  }
   await writeDB(db);
 }
 
@@ -268,20 +289,61 @@ export async function deleteCustomQuestion(id: number): Promise<void> {
 // ─── Madde 2: Toplu koşu silme ──────────────────────────────────────
 
 /**
- * Verilen run ID'lerine sahip TÜM koşu kayıtlarını kalıcı olarak siler.
- * @returns Silinen kayıt sayısı.
+ * Verilen run ID'lerine sahip koşuları ARŞİVELER (fiziksel silme YOKTUR).
+ * Koşular `runs` dizisinden `archivedRuns`'a taşınır — geri dönüşüm kutusu
+ * gibidir; `restoreRuns` ile her zaman geri getirilebilir.
+ * @returns Arşivlenen kayıt sayısı.
  */
 export async function deleteRuns(runIds: string[]): Promise<number> {
   if (runIds.length === 0) return 0;
   const db = await readDB();
   const idSet = new Set(runIds);
-  const before = db.runs.length;
-  db.runs = db.runs.filter((run) => !idSet.has(run.id));
-  const deleted = before - db.runs.length;
-  if (deleted > 0) {
-    await writeDB(db);
+  const archived: BenchmarkRun[] = [];
+  const kept: BenchmarkRun[] = [];
+  for (const run of db.runs) {
+    if (idSet.has(run.id)) archived.push(run);
+    else kept.push(run);
   }
-  return deleted;
+  if (archived.length === 0) return 0;
+  db.runs = kept;
+  db.archivedRuns = [...(db.archivedRuns ?? []), ...archived];
+  await writeDB(db);
+  return archived.length;
+}
+
+/**
+ * Arşivdeki koşuları geri yükler.
+ * @param runIds Boş dizi/verilmezse arşivdeki TÜM koşular geri yüklenir.
+ * @returns Geri yüklenen kayıt sayısı.
+ */
+export async function restoreRuns(runIds?: string[]): Promise<number> {
+  const db = await readDB();
+  const archive = db.archivedRuns ?? [];
+  if (archive.length === 0) return 0;
+  const restoreAll = !runIds || runIds.length === 0;
+  const idSet = new Set(runIds ?? []);
+  const toRestore: BenchmarkRun[] = [];
+  const remaining: BenchmarkRun[] = [];
+  for (const run of archive) {
+    if (restoreAll || idSet.has(run.id)) toRestore.push(run);
+    else remaining.push(run);
+  }
+  if (toRestore.length === 0) return 0;
+  // Aynı ID'li koşu zaten runs'ta varsa arşivden geleni atla (çakışma yok)
+  const existingIds = new Set(db.runs.map((r) => r.id));
+  const restored = toRestore.filter((r) => !existingIds.has(r.id));
+  db.runs = [...db.runs, ...restored];
+  db.archivedRuns = remaining;
+  await writeDB(db);
+  return restored.length;
+}
+
+/**
+ * Arşivlenmiş koşuların listesini döner (geri yükleme UI'ı için).
+ */
+export async function readArchivedRuns(): Promise<BenchmarkRun[]> {
+  const db = await readDB();
+  return db.archivedRuns ?? [];
 }
 
 // ─── Madde 3: Standart soru seçimi ──────────────────────────────────

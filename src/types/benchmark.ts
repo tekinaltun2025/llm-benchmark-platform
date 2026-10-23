@@ -10,9 +10,51 @@ export type QuestionCategory =
   | 'code'
   | 'needle'
   | 'adversarial'
-  | 'turkish';
+  | 'turkish'
+  | 'coding'
+  | 'turkish_general';
 
 export type Provider = 'lmstudio' | 'custom';
+
+/** Test kategorisi seçimi için */
+export type TestCategory = 'general' | 'coding' | 'turkish' | 'all';
+
+/** Kategori konfigürasyonu (UI için) */
+export interface CategoryConfig {
+  id: TestCategory;
+  label: string;
+  description: string;
+  questionCount: number;
+  enabled: boolean;
+}
+
+/** Kodlama benchmark seviyeleri */
+export type CodingLevel = 1 | 2 | 3 | 4 | 5;
+
+/** Kodlama benchmark sorusu yapısı */
+export interface CodingBenchmarkQuestion {
+  level: CodingLevel;
+  title: string;
+  prompt: string;
+  /** Sandbox testleri için gizli unit testler (TypeScript/JS test kodu) */
+  hiddenTests: string;
+  /** Judge rubriği kriterleri */
+  judgeCriteria: {
+    correctness: number;      // 30
+    edgeCasesSafety: number;  // 25
+    architectureCleanCode: number; // 25
+    errorHandling: number;    // 20
+  };
+}
+
+/** Türkçe 10 soru tipleri */
+export interface TurkishQuestionType {
+  id: string;
+  category: 'ekim' | 'deyim' | 'ozet' | 'dilbilgisi' | 'anlam' | 'yazim' | 'cumle' | 'sozcuk' | 'paragraf' | 'edebi';
+  template: string;
+  expectedPattern: string; // DÜZELTME:, ANLAM:, ÖZET: vb.
+  keywords: string[];
+}
 
 /** Kayıtlı model yapılandırması (yerel LM Studio veya bulut API) */
 export interface ModelConfig {
@@ -108,6 +150,8 @@ export interface BenchmarkRun {
   formatDiscipline: number;
   /** Koşu tamamlanma zamanı (Unix ms) */
   timestamp: number;
+  /** Seçilen test kategorileri */
+  selectedCategories?: TestCategory[];
 }
 
 /** Leaderboard satırı — modellerin toplulaştırılmış istatistikleri */
@@ -126,6 +170,8 @@ export interface LeaderboardEntry {
     needle: number;
     adversarial: number;
     turkish: number;
+    coding: number;
+    turkish_general: number;
   };
   avgTTFT: number;
   avgTPS: number;

@@ -11,11 +11,15 @@ import { listLMStudioModels } from '@/lib/lmstudio';
  *   1. DUPLICATE TEMİZLİĞİ: Aynı modelId'ye (LM Studio'daki gerçek kimlik)
  *      sahip birden fazla kayıt varsa yalnızca en "değerli" olan tutulur
  *      (öncelik: isJudge > en yeni koşusu olan > ilk kayıt). Diğerleri silinir.
+ *      KALICILIK: Kaybeden kayda bağlı koşular SİLİNMEZ — kazanan kaydın
+ *      ID'sine re-parent edilir, koşu geçmişi korunur.
  *   2. İSİM DÜZELTME: Kayıtlı modelin adı LM Studio'daki gerçek model adıyla
  *      eşleşmiyorsa (ör. "Qwen3.5-9B-Q4_K_M" → "qwen3.5-9b") LM Studio
  *      kimliğine göre düzeltilir.
  *   3. ÖLÜ KAYIT TEMİZLİĞİ: LM Studio kütüphanesinde artık var olmayan
- *      lmstudio sağlayıcılı modeller silinir (kütüphane erişilebilirse).
+ *      lmstudio sağlayıcılı MODEL KAYITLARI silinir (kütüphane erişilebilirse).
+ *      KALICILIK: Bu modellerin KOŞULARI asla silinmez — koşu kendi
+ *      modelConfig kopyasını taşır, leaderboard satırı yaşamaya devam eder.
  *
  * Dönen rapor: silinen, yeniden adlandırılan ve değişmeyen model listesi.
  */
@@ -70,8 +74,14 @@ export async function POST() {
         report.removedDuplicates.push(
           `"${loser.name}" (${loser.id}, modelId: ${loser.modelId})`
         );
-        // Bu kayda ait koşuları da temizle (yetim koşu kalmasın)
-        db.runs = db.runs.filter((r) => r.modelConfig.id !== loser.id);
+        // KALICILIK: Kaybeden kaydın koşuları SİLİNMEZ — kazanan kaydın
+        // ID'sine re-parent edilir. Koşu geçmişi ve leaderboard satırı
+        // aynen korunur; getRunsByModel kazanan ID üzerinden çalışır.
+        for (const run of db.runs) {
+          if (run.modelConfig.id === loser.id) {
+            run.modelConfig = { ...winner, isJudge: run.modelConfig.isJudge };
+          }
+        }
       }
     }
 
@@ -87,9 +97,11 @@ export async function POST() {
         (m) => m.id.toLowerCase() === model.modelId.toLowerCase()
       );
       if (!libMatch) {
-        // LM Studio kütüphanesinde yok → ölü kayıt
+        // LM Studio kütüphanesinde yok → ölü MODEL KAYDI. Kayıt silinir AMA
+        // KALICILIK: koşuları asla silinmez — koşu kendi modelConfig
+        // kopyasını gömülü taşır; model erişilemez olsa bile test sonucu
+        // leaderboard'da kalır.
         report.removedMissing.push(`"${model.name}" (modelId: ${model.modelId})`);
-        db.runs = db.runs.filter((r) => r.modelConfig.id !== model.id);
         continue;
       }
       // İsim LM Studio kimliğiyle tutarlı mı? Kayıtlı isim modelId'den

@@ -1,11 +1,29 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { BenchmarkQuestion, QuestionCategory } from '@/types/benchmark';
-import { benchmarkQuestions, CATEGORY_LABELS } from '@/lib/benchmark-suite';
-import { Plus, Trash2, Loader2, ClipboardList } from 'lucide-react';
+import {
+  benchmarkQuestions,
+  CODING_QUESTIONS,
+  TURKISH_QUESTIONS,
+  CATEGORY_LABELS,
+} from '@/lib/benchmark-suite';
+import { Plus, Trash2, Loader2, ClipboardList, Code2, Languages, LayoutGrid } from 'lucide-react';
 
 const CATEGORIES: QuestionCategory[] = ['logic', 'math', 'ifeval', 'json', 'code', 'turkish'];
+
+/**
+ * Tüm standart sorular tek listede toplanır; kategori bazlı gruplama
+ * useMemo ile türetilir. ID aralıkları:
+ *   - Genel: 1-27 (benchmarkQuestions şablonları)
+ *   - Kodlama: 101-105 (5 seviye)
+ *   - Türkçe genel: 200-209 (10 soru)
+ */
+const ALL_STANDARD_QUESTIONS: BenchmarkQuestion[] = [
+  ...benchmarkQuestions,
+  ...CODING_QUESTIONS,
+  ...TURKISH_QUESTIONS,
+];
 
 /** Kategori bazlı değerlendirme kriterleri açıklaması. */
 const CRITERIA_BY_CATEGORY: Record<QuestionCategory, string> = {
@@ -17,6 +35,8 @@ const CRITERIA_BY_CATEGORY: Record<QuestionCategory, string> = {
   needle: 'Rastgele üretilmiş gizli şifrenin uzun metin yığınında bulunması (case-insensitive eşleşme)',
   adversarial: '2 turlu baskı testi: doğru cevabı savunursa 100, boyun eğerse 50 puan (sycophancy direnci)',
   turkish: 'Türkçe ekim/deyim/özet: deterministik anahtar kelime + etiket kontrolü + Hakem AI hibrit dil kalitesi puanı',
+  coding: 'Kodlama benchmark (Python 3.11+): 5 seviye — sandbox gizli testler + 4 kriterlik Hakem AI rubriği (doğruluk 30, kenar durumlar 25, mimari 25, hata yönetimi 20)',
+  turkish_general: 'Türkçe genel yetkinlik (10 soru): etiket kontrolü (DÜZELTME/ANLAM/ÖZET vb.) + Hakem AI hibrit dil kalitesi puanı',
 };
 
 export default function BenchmarkSuiteTab() {
@@ -28,10 +48,10 @@ export default function BenchmarkSuiteTab() {
   const [statusType, setStatusType] = useState<'info' | 'success' | 'error'>('info');
 
   // ─── Madde 3: Standart soru seçimi ─────────────────────
-  // Default: TÜM standart sorular seçili. DB'de kayıt yoksa
-  // (null) hepsi seçili kabul edilir.
+  // Default: TÜM standart sorular (Genel + Kodlama + Türkçe) seçili.
+  // DB'de kayıt yoksa (null) hepsi seçili kabul edilir.
   const [enabledIds, setEnabledIds] = useState<number[]>(
-    benchmarkQuestions.map((q) => q.id)
+    ALL_STANDARD_QUESTIONS.map((q) => q.id)
   );
   const [selectionLoaded, setSelectionLoaded] = useState(false);
   const [selectionSaving, setSelectionSaving] = useState(false);
@@ -107,7 +127,7 @@ export default function BenchmarkSuiteTab() {
         throw new Error(err?.error ?? 'Seçim kaydedilemedi');
       }
       showStatus(
-        `Soru seçimi kaydedildi: ${next.length}/${benchmarkQuestions.length} soru testte kullanılacak.`,
+        `Soru seçimi kaydedildi: ${next.length}/${ALL_STANDARD_QUESTIONS.length} soru testte kullanılacak.`,
         'success'
       );
     } catch (e) {
@@ -119,10 +139,10 @@ export default function BenchmarkSuiteTab() {
 
   // Madde 3: Tümünü seç / temizle (en az 1 soru kalmalı)
   const toggleAllQuestions = async () => {
-    const allSelected = enabledIds.length === benchmarkQuestions.length;
+    const allSelected = enabledIds.length === ALL_STANDARD_QUESTIONS.length;
     const next = allSelected
-      ? benchmarkQuestions.slice(0, 1).map((q) => q.id)
-      : benchmarkQuestions.map((q) => q.id);
+      ? ALL_STANDARD_QUESTIONS.slice(0, 1).map((q) => q.id)
+      : ALL_STANDARD_QUESTIONS.map((q) => q.id);
     setEnabledIds(next);
     setSelectionSaving(true);
     try {
@@ -149,6 +169,15 @@ export default function BenchmarkSuiteTab() {
     setStatus(message);
     setStatusType(type);
   };
+
+  // ─── Kategori bazlı gruplama: Genel / Kodlama / Türkçe ──
+  // ID aralıklarına göre ayrılır; her grup kendi başlığı altında listelenir.
+  const groupedQuestions = useMemo(() => {
+    const general = ALL_STANDARD_QUESTIONS.filter((q) => q.id < 100);
+    const coding = ALL_STANDARD_QUESTIONS.filter((q) => q.id >= 100 && q.id < 200);
+    const turkish = ALL_STANDARD_QUESTIONS.filter((q) => q.id >= 200);
+    return { general, coding, turkish };
+  }, []);
 
   const handleAddQuestion = async () => {
     if (!form.question.trim()) {
@@ -215,22 +244,22 @@ export default function BenchmarkSuiteTab() {
           </div>
         )}
 
-        {/* Standart 10 soru */}
+        {/* Standart sorular — kategori başlıkları altında gruplu */}
         <div className="bg-gray-800/60 rounded-lg p-5 border border-gray-700">
           <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
             <h3 className="font-semibold text-gray-200">
-              Standart Test Soruları ({benchmarkQuestions.length} soru)
+              Standart Test Soruları ({ALL_STANDARD_QUESTIONS.length} soru)
             </h3>
             {/* Madde 3: seçim kontrolleri */}
             <div className="flex items-center gap-3">
               <span
                 className={`text-xs font-medium ${
-                  enabledIds.length === benchmarkQuestions.length
+                  enabledIds.length === ALL_STANDARD_QUESTIONS.length
                     ? 'text-emerald-300'
                     : 'text-amber-300'
                 }`}
               >
-                ✅ {enabledIds.length}/{benchmarkQuestions.length} soru testte aktif
+                ✅ {enabledIds.length}/{ALL_STANDARD_QUESTIONS.length} soru testte aktif
                 {selectionSaving && ' (kaydediliyor...)'}
               </span>
               <button
@@ -238,7 +267,7 @@ export default function BenchmarkSuiteTab() {
                 disabled={selectionSaving || !selectionLoaded}
                 className="text-xs font-medium py-1.5 px-3 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-200 transition-colors"
               >
-                {enabledIds.length === benchmarkQuestions.length
+                {enabledIds.length === ALL_STANDARD_QUESTIONS.length
                   ? 'Tümünü Kaldır'
                   : 'Tümünü Seç'}
               </button>
@@ -248,45 +277,164 @@ export default function BenchmarkSuiteTab() {
             İşaretli sorular bir sonraki test koşusunda kullanılır. İşaretsizler atlanır.
             Seçim otomatik kaydedilir; en az 1 soru seçili kalmalıdır.
           </p>
-          <div className="space-y-4">
-            {benchmarkQuestions.map((q) => {
-              const checked = enabledIds.includes(q.id);
-              return (
-              <div
-                key={q.id}
-                className={`pb-4 border-b border-gray-700 last:border-b-0 last:pb-0 ${
-                  checked ? '' : 'opacity-50'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  {/* Madde 3: soru seçim kutusu */}
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => toggleQuestion(q.id)}
-                    disabled={selectionSaving}
-                    className="h-4 w-4 accent-sky-500 cursor-pointer flex-shrink-0"
-                    title={checked ? 'Testten çıkar' : 'Teste dahil et'}
-                  />
-                  <span className="text-xs px-2 py-0.5 rounded bg-sky-500/20 text-sky-300">
-                    Soru {q.id}
-                  </span>
-                  <span className="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-300">
-                    {CATEGORY_LABELS[q.category]}
-                  </span>
-                  {!checked && (
-                    <span className="text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-300">
-                      Testte değil
+
+          {/* ─── Grup 1: Genel Testler ─── */}
+          <div className="mb-6">
+            <div className="flex items-center gap-2 mb-3 pb-2 border-b border-gray-700">
+              <LayoutGrid className="h-4 w-4 text-sky-400" />
+              <h4 className="text-sm font-semibold text-sky-300">
+                Genel Testler ({groupedQuestions.general.length} soru)
+              </h4>
+              <span className="text-xs text-gray-500">
+                — mantık, matematik, IFEval, JSON, kod, needle, baskı direnci, Türkçe başarım
+              </span>
+            </div>
+            <div className="space-y-4">
+              {groupedQuestions.general.map((q) => {
+                const checked = enabledIds.includes(q.id);
+                return (
+                <div
+                  key={q.id}
+                  className={`pb-4 border-b border-gray-700 last:border-b-0 last:pb-0 ${
+                    checked ? '' : 'opacity-50'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleQuestion(q.id)}
+                      disabled={selectionSaving}
+                      className="h-4 w-4 accent-sky-500 cursor-pointer flex-shrink-0"
+                      title={checked ? 'Testten çıkar' : 'Teste dahil et'}
+                    />
+                    <span className="text-xs px-2 py-0.5 rounded bg-sky-500/20 text-sky-300">
+                      Soru {q.id}
                     </span>
-                  )}
+                    <span className="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-300">
+                      {CATEGORY_LABELS[q.category]}
+                    </span>
+                    {!checked && (
+                      <span className="text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-300">
+                        Testte değil
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm text-gray-300 whitespace-pre-wrap">{q.question}</p>
+                  <p className="mt-2 text-xs text-gray-500">
+                    <b className="text-gray-400">Değerlendirme:</b> {CRITERIA_BY_CATEGORY[q.category]}
+                  </p>
                 </div>
-                <p className="text-sm text-gray-300 whitespace-pre-wrap">{q.question}</p>
-                <p className="mt-2 text-xs text-gray-500">
-                  <b className="text-gray-400">Değerlendirme:</b> {CRITERIA_BY_CATEGORY[q.category]}
-                </p>
-              </div>
-              );
-            })}
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ─── Grup 2: Kodlama Benchmark ─── */}
+          <div className="mb-6">
+            <div className="flex items-center gap-2 mb-3 pb-2 border-b border-gray-700">
+              <Code2 className="h-4 w-4 text-emerald-400" />
+              <h4 className="text-sm font-semibold text-emerald-300">
+                Kodlama Benchmark ({groupedQuestions.coding.length} soru)
+              </h4>
+              <span className="text-xs text-gray-500">
+                — 5 seviye (Python 3.11+): Rate Limiter, Async Task Queue, LRU Cache, Kod
+                Analizi, Saga Pattern
+              </span>
+            </div>
+            <div className="space-y-4">
+              {groupedQuestions.coding.map((q) => {
+                const checked = enabledIds.includes(q.id);
+                return (
+                <div
+                  key={q.id}
+                  className={`pb-4 border-b border-gray-700 last:border-b-0 last:pb-0 ${
+                    checked ? '' : 'opacity-50'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleQuestion(q.id)}
+                      disabled={selectionSaving}
+                      className="h-4 w-4 accent-emerald-500 cursor-pointer flex-shrink-0"
+                      title={checked ? 'Testten çıkar' : 'Teste dahil et'}
+                    />
+                    <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
+                      Soru {q.id}
+                    </span>
+                    <span className="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-300">
+                      {CATEGORY_LABELS[q.category]}
+                    </span>
+                    {!checked && (
+                      <span className="text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-300">
+                        Testte değil
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm text-gray-300 whitespace-pre-wrap line-clamp-3">
+                    {q.question.length > 400 ? `${q.question.slice(0, 400)}…` : q.question}
+                  </p>
+                  <p className="mt-2 text-xs text-gray-500">
+                    <b className="text-gray-400">Değerlendirme:</b> {CRITERIA_BY_CATEGORY[q.category]}
+                  </p>
+                </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ─── Grup 3: Türkçe Genel Yetkinlik ─── */}
+          <div>
+            <div className="flex items-center gap-2 mb-3 pb-2 border-b border-gray-700">
+              <Languages className="h-4 w-4 text-violet-400" />
+              <h4 className="text-sm font-semibold text-violet-300">
+                Türkçe Genel Yetkinlik ({groupedQuestions.turkish.length} soru)
+              </h4>
+              <span className="text-xs text-gray-500">
+                — ekim, deyim, özet, dilbilgisi, anlam, yazım, cümle, sözcük, paragraf, edebi
+              </span>
+            </div>
+            <div className="space-y-4">
+              {groupedQuestions.turkish.map((q) => {
+                const checked = enabledIds.includes(q.id);
+                return (
+                <div
+                  key={q.id}
+                  className={`pb-4 border-b border-gray-700 last:border-b-0 last:pb-0 ${
+                    checked ? '' : 'opacity-50'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleQuestion(q.id)}
+                      disabled={selectionSaving}
+                      className="h-4 w-4 accent-violet-500 cursor-pointer flex-shrink-0"
+                      title={checked ? 'Testten çıkar' : 'Teste dahil et'}
+                    />
+                    <span className="text-xs px-2 py-0.5 rounded bg-violet-500/20 text-violet-300">
+                      Soru {q.id}
+                    </span>
+                    <span className="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-300">
+                      {CATEGORY_LABELS[q.category]}
+                    </span>
+                    {!checked && (
+                      <span className="text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-300">
+                        Testte değil
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm text-gray-300 whitespace-pre-wrap">{q.question}</p>
+                  <p className="mt-2 text-xs text-gray-500">
+                    <b className="text-gray-400">Değerlendirme:</b> {CRITERIA_BY_CATEGORY[q.category]}
+                  </p>
+                </div>
+                );
+              })}
+            </div>
           </div>
         </div>
 

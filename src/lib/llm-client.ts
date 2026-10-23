@@ -1,4 +1,14 @@
 import { ModelConfig } from "../types/benchmark";
+import { buildJudgePrompt, parseJudgeResult } from "./judge-rubric";
+
+/** Judge değerlendirme sonucu — yeni rubrik şeması */
+export interface JudgeEvaluationResult {
+  total_score: number;
+  breakdown: Record<string, number>;
+  strengths: string[];
+  critical_flaws: string[];
+  verdict: string;
+}
 
 /** Sohbet mesajı — multi-turn (adversarial baskı turu) için. */
 export interface ChatMessage {
@@ -33,7 +43,7 @@ function normalizeBaseUrl(baseUrl: string): string {
 
 /**
  * OpenAI uyumlu /chat/completions uç noktasına streaming istek atar.
- * TTFT ve TPS metriklerini ölçer; <think> etiketlerini ve
+ * TTFT ve TPS metriklerini ölçer;  etiketlerini ve
  * reasoning_content alanını ayrıştırır.
  *
  * @param modelConfig Model yapılandırması (baseUrl, apiKey, modelId)
@@ -191,14 +201,15 @@ export function extractThinkingProcess(answer: string): {
 
 /**
  * Hakem AI (LLM-as-a-Judge) değerlendirmesi.
- * Hakem modele soru + cevabı gönderir ve
- * {"score": 0-100, "reasoning": "..."} formatında JSON çıktı alır.
+ * Kategori bazlı rubrik kullanarak değerlendirme yapar.
+ * Geriye dönük uyumluluk için eski { score, reasoning } dönüş formatını korur.
  */
 export async function evaluateWithJudge(
   judgeConfig: ModelConfig,
   question: string,
   answer: string,
-  referenceAnswer?: string
+  referenceAnswer?: string,
+  category?: string
 ): Promise<{ score: number; reasoning: string } | null> {
   // Dinamik sorularda doğru cevap her koşuda rastgele üretilir; hakeme
   // referans olarak iletilir — aksi halde rastgele sayıları bilemez.
@@ -206,25 +217,12 @@ export async function evaluateWithJudge(
     ? `\nBilinen Doğru Cevap (referans — puanlamada kullan):\n${referenceAnswer}\n`
     : "";
 
-  const judgePrompt = `Sen bir yapay zeka değerlendirme uzmanısın (Hakem AI). Aşağıda verilen soruya bir modelin verdiği cevabı değerlendireceksin.
-
-Değerlendirme kriterleri:
-1. Doğruluk: Cevap sorunun doğru çözümünü/nihai cevabını içeriyor mu?
-2. Eksiksizlik: Cevap sorunun istediği tüm bileşenleri içeriyor mu?
-3. Kalite: Kod sorularında algoritma doğru, verimli (istenen karmaşıklıkta) ve çalışıyor mu? Metin sorularında akıcı ve tutarlı mı?
-
-Cevabı 0 ile 100 arasında bir puanla değerlendir. 100 = kusursuz, 50 = kısmen doğru, 0 = tamamen yanlış veya alakasız.
-
-ÖNEMLİ: Düşünme yapma, adım adım akıl yürütme YAPMA, <think> etiketi KULLANMA. Doğrudan ve SADECE aşağıdaki JSON formatında yanıt ver. İlk karakterin { ve son karakterin } olmalı:
-{"score": <0-100 arası tam sayı>, "reasoning": "<kısa değerlendirme gerekçesi, en fazla 2 cümle>"}
-
-Soru:
-${question}
-${referenceSection}
-Değerlendirilecek Cevap:
-${answer}
-
-JSON çıktın:`;
+  const judgePrompt = buildJudgePrompt(
+    question,
+    answer,
+    referenceAnswer,
+    category ?? "general"
+  );
 
   /**
    * Hakem yanıtından puanı toleranslı şekilde çıkarır:

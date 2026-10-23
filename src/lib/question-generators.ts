@@ -1,4 +1,6 @@
 import { BenchmarkQuestion } from "../types/benchmark";
+import { createCodingBenchmarkQuestions } from "./coding-benchmark";
+import { generateTurkishQuestions as generateTurkishQuestionsImpl } from "./turkish-benchmark";
 
 /**
  * ═══════════════════════════════════════════════════════════════════
@@ -776,5 +778,93 @@ export function generateRunQuestions(includeNeedle = true): BenchmarkQuestion[] 
 
   questions.push(generateQ13());
 
+  return questions;
+}
+
+/**
+ * Kodlama benchmark sorularını üretir (5 seviye)
+ * Kategori: 'coding', ID'ler: 101-105
+ */
+export function generateCodingQuestions(): BenchmarkQuestion[] {
+  return createCodingBenchmarkQuestions();
+}
+
+/**
+ * Türkçe benchmark sorularını üretir (10 soru)
+ * Kategori: 'turkish_general', ID'ler: 200-209
+ */
+export function generateTurkishQuestions(): BenchmarkQuestion[] {
+  return generateTurkishQuestionsImpl();
+}
+
+/**
+ * Seçilen kategorilere göre birleşik soru seti üretir
+ * @param categories Seçilen test kategorileri
+ * @param includeNeedle Needle testleri dahil edilsin mi
+ */
+export function generateRunQuestionsByCategory(
+  categories: Array<'general' | 'coding' | 'turkish' | 'all'>,
+  includeNeedle = true
+): BenchmarkQuestion[] {
+  const questions: BenchmarkQuestion[] = [];
+  
+  const hasGeneral = categories.includes('general') || categories.includes('all');
+  const hasCoding = categories.includes('coding') || categories.includes('all');
+  const hasTurkish = categories.includes('turkish') || categories.includes('all');
+  
+  if (hasGeneral) {
+    // Genel sorular (mevcut generateRunQuestions mantığı)
+    questions.push(
+      generateQ1(),
+      generateQ2(),
+      generateQ3(),
+      generateQ4(),
+      generateQ5(),
+      generateQ6(),
+      generateQ7(),
+      generateQ8(),
+      generateQ14(),
+      generateQ15(),
+      generateQ16(),
+      generateQ20(),
+      generateQ21(),
+      generateQ22(),
+      generateQ23(),
+      generateQ24(),
+      generateQ25(),
+      generateQ26(),
+      generateQ27(),
+      // Kod soruları (eski 'code' kategorisi - artık 'coding' ayrı)
+      {
+        id: 9,
+        category: "code",
+        question:
+          "Zaman karmaşıklığı O(n) olan, sıra korumalı tekilleştirme (distinct) algoritmasını TypeScript'te yaz. Fonksiyon adı 'distinctOrderPreserving' olmalı, girdisi number[] dizisi, çıktısı tekrarları atılmış ama ilk görülme sırası korunmuş number[] dizisi olmalı. Sadece fonksiyon kodunu yaz, örnek kullanım ekleme.",
+        evaluationParams: { functionName: "distinctOrderPreserving" },
+      },
+      {
+        id: 10,
+        category: "code",
+        question:
+          "Verilen iç içe (nested) bir sayı dizisini özyinelemeli (recursive) olarak düzleştiren (flatten) ve yalnızca ÇİFT sayıları büyükten küçüğe sıralayan TypeScript fonksiyonunu yaz. Fonksiyon adı 'flattenAndSortEvens' olmalı, girdisi her derinlikte iç içe olabilen dizi (ör. [1, [4, 2], [8, [6, 3]]]), çıktısı number[] olmalı. Sadece fonksiyon kodunu yaz, örnek kullanım ekleme.",
+        evaluationParams: { functionName: "flattenAndSortEvens" },
+      }
+    );
+    
+    if (includeNeedle) {
+      questions.push(generateQ11(), generateQ12());
+    }
+    
+    questions.push(generateQ13());
+  }
+  
+  if (hasCoding) {
+    questions.push(...generateCodingQuestions());
+  }
+  
+  if (hasTurkish) {
+    questions.push(...generateTurkishQuestions());
+  }
+  
   return questions;
 }
